@@ -1,4 +1,16 @@
 # LERF: Language Embedded Radiance Fields
+看向z-
+
+pip install torchtyping
+
+
+
+
+
+
+
+
+
 This is the official implementation for [LERF](https://lerf.io).
 
 
