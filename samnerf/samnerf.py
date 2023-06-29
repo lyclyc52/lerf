@@ -30,7 +30,7 @@ class SAMNERFModelConfig(NerfactoModelConfig):
     contrastive_sample_n = 1 # size of constrastive sample points
     contrastive_temperature = 0.5 
     contrastive_loss_weight: float = 0.1
-    postive_threshold: float = 0.5 # threshold to distinguish positive and negative for contrastive learning
+    postive_threshold: float = 0.7 # threshold to distinguish positive and negative for contrastive learning
     
     n_scales: int = 30
     max_scale: float = 1.5
@@ -133,9 +133,11 @@ class SAMNERFModel(NerfactoModel):
             outputs["dino"] = self.renderer_mean(
                 embeds=samnerf_field_outputs[SAMNERFFieldHeadNames.DINO], weights=samnerf_weights.detach()
             )
+            
 
         if not self.training:
             with torch.no_grad():
+                # output the best result based on a suitable scale
                 max_across, best_scales = self.get_max_across(
                     samnerf_samples,
                     samnerf_weights,
@@ -243,7 +245,7 @@ class SAMNERFModel(NerfactoModel):
                 support_ray = img_ray_0[support_ray].detach()
                 
                 self_support_mask = self.self_support(img_ray_1, support_ray)
-                loss_dict['contrastive_loss'] = self.contrastive_loss(self_support_mask, img_ray_0, support_ray)
+                loss_dict['contrastive_loss'] = self.contrastive_loss(self_support_mask, img_ray_1, support_ray)
                 
                 
         return loss_dict
@@ -255,21 +257,19 @@ class SAMNERFModel(NerfactoModel):
 
     def contrastive_loss(self, mask, features, support_feature):
         """
+        Referring to CLIP https://arxiv.org/pdf/2103.00020.pdf
         Args:
             mask: [N, 1]
             features: [N, K]
             support_feature: [1, K]
         """
-        labels = mask> self.config.postive_threshold
+        labels = (mask> self.config.postive_threshold).to(torch.float32)
         
         
-        similarity = features @ support_feature.T
-        print_shape(similarity)
-        exit()
-        # contrastive_loss = pos_exp.mean() + max(self.config.epsilon - neg_exp).mean()
-        
+        similarity = features @ support_feature.T * torch.exp(torch.tensor(self.config.contrastive_temperature))
 
-        
+        contrastive_loss = torch.nn.functional.binary_cross_entropy_with_logits(similarity[..., 0], labels)
+
         
         return contrastive_loss
     
@@ -280,10 +280,7 @@ class SAMNERFModel(NerfactoModel):
             feature:[N, K]
             support:[1, K]
         """
-        
-        print_shape(feature_q)
-        print_shape(support)
-        
+
         pred_1 = F.cosine_similarity(feature_q, support, dim=1) # 
 
 
@@ -294,45 +291,40 @@ class SAMNERFModel(NerfactoModel):
         
         
         if (pred_1 > fg_thres).sum() > 0:
-            fg_feat = cur_feat[(pred_1>fg_thres)] #.mean(-1)
+            fg_feat = cur_feat[(pred_1>fg_thres)] # [N_f, K]
         else:
-            fg_feat = cur_feat[torch.topk(pred_1, 12).indices] #.mean(-1)
+            fg_feat = cur_feat[torch.topk(pred_1, 12).indices] 
         if ((1 - pred_1) > bg_thres).sum() > 0:
-            bg_feat = cur_feat[((1 - pred_1)>bg_thres)] #.mean(-1)
+            bg_feat = cur_feat[((1 - pred_1)>bg_thres)] # [N_b, K]
         else:
-            bg_feat = cur_feat[torch.topk((1 - pred_1), 12).indices] #.mean(-1)
+            bg_feat = cur_feat[torch.topk((1 - pred_1), 12).indices] 
                 # global proto
                 
                 
-        fg_proto = fg_feat.mean(-1)
+        fg_proto = fg_feat.mean(0)
         bg_proto = bg_feat.mean(-1)
 
-        print_shape(fg_feat)
-        print(torch.norm(fg_feat))
-        exit()
         # local proto
-        fg_feat_norm = fg_feat / torch.norm(fg_feat, 2, 0, True) # 1024, N1
-        bg_feat_norm = bg_feat / torch.norm(bg_feat, 2, 0, True) # 1024, N2
-        cur_feat_norm = cur_feat / torch.norm(cur_feat, 2, 0, True) # 1024, N3
+        # fg_feat_norm = fg_feat / torch.norm(fg_feat, 2, 0, True) # 1024, N1
+        # bg_feat_norm = bg_feat / torch.norm(bg_feat, 2, 0, True) # 1024, N2
+        # cur_feat_norm = cur_feat / torch.norm(cur_feat, 2, 0, True) # 1024, N3
 
-        cur_feat_norm_t = cur_feat_norm.t() # N3, 1024
-        fg_sim = torch.matmul(cur_feat_norm_t, fg_feat_norm) * 2.0 # N3, N1
-        bg_sim = torch.matmul(cur_feat_norm_t, bg_feat_norm) * 2.0 # N3, N2
+        fg_feat_t = fg_feat.t() 
+        bg_feat_t = bg_feat.t() 
+        
+        fg_sim = torch.matmul(cur_feat, fg_feat_t) * 2.0 # N, N_f
+        bg_sim = torch.matmul(cur_feat, bg_feat_t) * 2.0 # N, N_b
 
         fg_sim = fg_sim.softmax(-1)
         bg_sim = bg_sim.softmax(-1)
 
-        fg_proto_local = torch.matmul(fg_sim, fg_feat.t()) # N3, 1024
-        bg_proto_local = torch.matmul(bg_sim, bg_feat.t()) # N3, 1024
-
-        fg_proto_local = fg_proto_local.t().view(1024, f_h, f_w).unsqueeze(0) # 1024, N3
-        bg_proto_local = bg_proto_local.t().view(1024, f_h, f_w).unsqueeze(0) # 1024, N3
-
-
+        fg_proto_local = torch.matmul(fg_sim, fg_feat) # N, K
+        bg_proto_local = torch.matmul(bg_sim, bg_feat) # N, K
 
         # SSFP_1, SSBP_1, ASFP_1, ASBP_1 = self_support_loss(img_ray_1, support_ray)
         self_support = support * 0.5 + fg_proto * 0.5
         
         self_support_mask = F.cosine_similarity(feature_q, self_support)
+
                     
         return self_support_mask
