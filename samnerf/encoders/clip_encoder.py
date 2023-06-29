@@ -9,7 +9,7 @@ try:
 except ImportError:
     assert False, "clip is not installed, install it with `pip install clip`"
 
-from lerf.encoders.image_encoder import BaseImageEncoder, BaseImageEncoderConfig
+from samnerf.encoders.image_encoder import BaseImageEncoder, BaseImageEncoderConfig
 
 
 @dataclass

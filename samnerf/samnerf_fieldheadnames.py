@@ -6,5 +6,5 @@ class SAMNERFFieldHeadNames(Enum):
     HASHGRID = "hashgrid"
     CLIP = "clip"
     DINO = "dino"
-    SEEM = "seem"
-    SAM = 'sam'
+    # SEEM = "seem"
+    # SAM = 'sam'

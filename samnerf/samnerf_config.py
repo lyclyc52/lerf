@@ -20,6 +20,7 @@ Swap out the network config to use OpenCLIP or CLIP here.
 from samnerf.encoders.clip_encoder import CLIPNetworkConfig
 from samnerf.encoders.openclip_encoder import OpenCLIPNetworkConfig
 
+
 samnerf_method = MethodSpecification(
     config=TrainerConfig(
         method_name="samnerf",
@@ -30,11 +31,13 @@ samnerf_method = MethodSpecification(
         pipeline=SAMNERFPipelineConfig(
             datamanager=SAMNERFDataManagerConfig(
                 dataparser=NerfstudioDataParserConfig(train_split_fraction=0.99),
-                train_num_rays_per_batch=4096,
-                eval_num_rays_per_batch=4096,
+                train_num_rays_per_batch=4096*2,
+                eval_num_rays_per_batch=4096*2,
                 camera_optimizer=CameraOptimizerConfig(
                     mode="SO3xR3", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
                 ),
+                preload_model=True,
+                pretrain=False,
             ),
             model=SAMNERFModelConfig(
                 eval_num_rays_per_chunk=1 << 15,

@@ -9,7 +9,7 @@ try:
 except ImportError:
     assert False, "open_clip is not installed, install it with `pip install open-clip-torch`"
 
-from lerf.encoders.image_encoder import (BaseImageEncoder,
+from samnerf.encoders.image_encoder import (BaseImageEncoder,
                                          BaseImageEncoderConfig)
 from nerfstudio.viewer.server.viewer_elements import ViewerText
 
@@ -46,7 +46,7 @@ class OpenCLIPNetwork(BaseImageEncoder):
         self.model = model.to("cuda")
         self.clip_n_dims = self.config.clip_n_dims
 
-        self.positive_input = ViewerText("LERF Positives", "", cb_hook=self.gui_cb)
+        self.positive_input = ViewerText("SAMNERF Positives", "", cb_hook=self.gui_cb)
 
         self.positives = self.positive_input.value.split(";")
         self.negatives = self.config.negatives
