@@ -52,37 +52,12 @@ class LERFModel(NerfactoModel):
             clip_n_dims=self.image_encoder.embedding_dim,
         )
 
-        # populate some viewer logic
-        # TODO use the values from this code to select the scale
-        # def scale_cb(element):
-        #     self.config.n_scales = element.value
-
-        # self.n_scale_slider = ViewerSlider("N Scales", 15, 5, 30, 1, cb_hook=scale_cb)
-
-        # def max_cb(element):
-        #     self.config.max_scale = element.value
-
-        # self.max_scale_slider = ViewerSlider("Max Scale", 1.5, 0, 5, 0.05, cb_hook=max_cb)
-
-        # def hardcode_scale_cb(element):
-        #     self.hardcoded_scale = element.value
-
-        # self.hardcoded_scale_slider = ViewerSlider(
-        #     "Hardcoded Scale", 1.0, 0, 5, 0.05, cb_hook=hardcode_scale_cb, disabled=True
-        # )
-
-        # def single_scale_cb(element):
-        #     self.n_scale_slider.set_disabled(element.value)
-        #     self.max_scale_slider.set_disabled(element.value)
-        #     self.hardcoded_scale_slider.set_disabled(not element.value)
-
-        # self.single_scale_box = ViewerCheckbox("Single Scale", False, cb_hook=single_scale_cb)
 
     def get_max_across(self, ray_samples, weights, hashgrid_field, scales_shape, preset_scales=None):
         # TODO smoothen this out
         if preset_scales is not None:
             assert len(preset_scales) == len(self.image_encoder.positives)
-            scales_list = torch.tensor(preset_scales)
+            scales_list = preset_scales.clone().detach()
         else:
             scales_list = torch.linspace(0.0, self.config.max_scale, self.config.n_scales)
 
@@ -110,6 +85,7 @@ class LERFModel(NerfactoModel):
         return torch.stack(n_phrases_sims), torch.Tensor(n_phrases_maxs)
 
     def get_outputs(self, ray_bundle: RayBundle):
+
         ray_samples, weights_list, ray_samples_list = self.proposal_sampler(ray_bundle, density_fns=self.density_fns)
         ray_samples_list.append(ray_samples)
 
@@ -142,13 +118,19 @@ class LERFModel(NerfactoModel):
 
         lerf_field_outputs = self.lerf_field.get_outputs(lerf_samples, clip_scales)
 
+
+        # print(torch.sum(lerf_field_outputs[LERFFieldHeadNames.CLIP]))
         if self.training:
             outputs["clip"] = self.renderer_clip(
                 embeds=lerf_field_outputs[LERFFieldHeadNames.CLIP], weights=lerf_weights.detach()
             )
+            print(torch.sum(outputs["clip"]))
+
             outputs["dino"] = self.renderer_mean(
                 embeds=lerf_field_outputs[LERFFieldHeadNames.DINO], weights=lerf_weights.detach()
             )
+            
+        print()
 
         if not self.training:
             with torch.no_grad():
@@ -162,6 +144,14 @@ class LERFModel(NerfactoModel):
                 outputs["raw_relevancy"] = max_across  # N x B x 1
                 outputs["best_scales"] = best_scales.to(self.device)  # N
 
+        # for key in outputs:
+        #     if(torch.is_tensor(outputs[key]) and torch.sum(torch.isnan(outputs[key])) != 0):
+        #         print(key)
+        #         for k in outputs:
+        #             if(torch.is_tensor(outputs[k])):
+        #                 print(k)
+        #                 print(torch.sum(torch.isnan(outputs[k])))
+        #         exit()
         return outputs
 
     @torch.no_grad()
@@ -240,6 +230,7 @@ class LERFModel(NerfactoModel):
 
     def get_loss_dict(self, outputs, batch, metrics_dict=None):
         loss_dict = super().get_loss_dict(outputs, batch, metrics_dict)
+
         if self.training:
             unreduced_clip = self.config.clip_loss_weight * torch.nn.functional.huber_loss(
                 outputs["clip"], batch["clip"], delta=1.25, reduction="none"
@@ -247,6 +238,11 @@ class LERFModel(NerfactoModel):
             loss_dict["clip_loss"] = unreduced_clip.sum(dim=-1).nanmean()
             unreduced_dino = torch.nn.functional.mse_loss(outputs["dino"], batch["dino"], reduction="none")
             loss_dict["dino_loss"] = unreduced_dino.sum(dim=-1).nanmean()
+        for key in loss_dict:
+            if(torch.isnan(loss_dict[key])):
+                print(key)
+                print(loss_dict)
+                exit()
         return loss_dict
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:

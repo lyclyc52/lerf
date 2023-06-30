@@ -29,7 +29,7 @@ class SAMNERFModelConfig(NerfactoModelConfig):
     
     contrastive_sample_n = 1 # size of constrastive sample points
     contrastive_temperature = 0.5 
-    contrastive_loss_weight: float = 0.1
+    contrastive_loss_weight: float = 0.01
     postive_threshold: float = 0.7 # threshold to distinguish positive and negative for contrastive learning
     
     n_scales: int = 30
@@ -66,7 +66,7 @@ class SAMNERFModel(NerfactoModel):
         # TODO smoothen this out
         if preset_scales is not None:
             assert len(preset_scales) == len(self.image_encoder.positives)
-            scales_list = torch.tensor(preset_scales)
+            scales_list = preset_scales.clone().detach()
         else:
             scales_list = torch.linspace(0.0, self.config.max_scale, self.config.n_scales)
 
@@ -245,8 +245,8 @@ class SAMNERFModel(NerfactoModel):
                 support_ray = img_ray_0[support_ray].detach()
                 
                 self_support_mask = self.self_support(img_ray_1, support_ray)
-                loss_dict['contrastive_loss'] = self.contrastive_loss(self_support_mask, img_ray_1, support_ray)
-                
+                loss_dict['contrastive_loss'] =  self.config.contrastive_loss_weight * self.contrastive_loss(self_support_mask, img_ray_1, support_ray) 
+            
                 
         return loss_dict
 

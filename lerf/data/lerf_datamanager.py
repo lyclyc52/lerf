@@ -113,9 +113,11 @@ class LERFDataManager(VanillaDataManager):  # pylint: disable=abstract-method
         ray_indices = batch["indices"]
         ray_bundle = self.train_ray_generator(ray_indices)
         batch["clip"], clip_scale = self.clip_interpolator(ray_indices)
+        batch["clip"] =  batch["clip"].to(torch.float32)
         batch["dino"] = self.dino_dataloader(ray_indices)
-        ray_bundle.metadata["clip_scales"] = clip_scale
+        ray_bundle.metadata["clip_scales"] = clip_scale.to(torch.float32)
         # assume all cameras have the same focal length and image width
         ray_bundle.metadata["fx"] = self.train_dataset.cameras[0].fx.item()
         ray_bundle.metadata["width"] = self.train_dataset.cameras[0].width.item()
+
         return ray_bundle, batch

@@ -98,11 +98,19 @@ class LERFField(Field):
         outputs[LERFFieldHeadNames.HASHGRID] = x.view(*ray_samples.frustums.shape, -1)
 
         clip_pass = self.clip_net(torch.cat([x, clip_scales.view(-1, 1)], dim=-1)).view(*ray_samples.frustums.shape, -1)
+        print("clip pass: ", torch.isneginf(clip_pass).sum())
+
         outputs[LERFFieldHeadNames.CLIP] = clip_pass / clip_pass.norm(dim=-1, keepdim=True)
 
         dino_pass = self.dino_net(x).view(*ray_samples.frustums.shape, -1)
         outputs[LERFFieldHeadNames.DINO] = dino_pass
 
+        if((torch.sum(torch.isnan(clip_pass)) != 0) or (torch.sum(torch.isnan(dino_pass))!=0)):
+            print('error')
+            exit()
+        
+        
+        
         return outputs
 
     def get_output_from_hashgrid(self, ray_samples: RaySamples, hashgrid_field, scale):

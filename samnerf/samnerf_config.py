@@ -10,6 +10,7 @@ from nerfstudio.engine.schedulers import ExponentialDecaySchedulerConfig
 from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.plugins.types import MethodSpecification
 
+from samnerf.samnerf_trainer import SAMNERFTrainerConfig
 from samnerf.data.samnerf_datamanager import SAMNERFDataManagerConfig
 from samnerf.samnerf import SAMNERFModelConfig
 from samnerf.samnerf_pipeline import SAMNERFPipelineConfig
@@ -22,12 +23,13 @@ from samnerf.encoders.openclip_encoder import OpenCLIPNetworkConfig
 
 
 samnerf_method = MethodSpecification(
-    config=TrainerConfig(
+    config=SAMNERFTrainerConfig(
         method_name="samnerf",
         steps_per_eval_batch=500,
         steps_per_save=2000,
         max_num_iterations=30000,
-        mixed_precision=True,
+        mixed_precision=False,
+        use_grad_scaler=False,
         pipeline=SAMNERFPipelineConfig(
             datamanager=SAMNERFDataManagerConfig(
                 dataparser=NerfstudioDataParserConfig(train_split_fraction=0.99),

@@ -116,7 +116,6 @@ class SAMNERFDataManager(VanillaDataManager):  # pylint: disable=abstract-method
         image_batch = next(self.iter_train_image_dataloader)
         use_contrastive_loss = self.train_count >= self.config.contrastive_threshold or self.config.preload_model
         use_contrastive_loss = use_contrastive_loss and not self.config.pretrain
-        
         if use_contrastive_loss :           
             train_idx = torch.randint(0, image_batch['image'].size(0), (2,))     
 
@@ -126,15 +125,16 @@ class SAMNERFDataManager(VanillaDataManager):  # pylint: disable=abstract-method
             
             assert self.train_pixel_sampler is not None
             batch = self.train_pixel_sampler.sample(new_image_batch)
-            intrinsic = self.train_ray_generator.cameras.get_intrinsics_matrices()
-            extrinsic = self.train_ray_generator.cameras.camera_to_worlds
-            
-            batch['intrinsic'], batch['extrinsic'] = {}, {}
             batch['image_idx'] = new_image_batch['image_idx']
+            # intrinsic = self.train_ray_generator.cameras.get_intrinsics_matrices()
+            # extrinsic = self.train_ray_generator.cameras.camera_to_worlds
             
-            for idx in new_image_batch['image_idx']:
-                batch['intrinsic'][idx] = intrinsic[idx]
-                batch['extrinsic'][idx] = extrinsic[idx]
+            # batch['intrinsic'], batch['extrinsic'] = {}, {}
+            
+            
+            # for idx in new_image_batch['image_idx']:
+            #     batch['intrinsic'][idx] = intrinsic[idx]
+            #     batch['extrinsic'][idx] = extrinsic[idx]
       
         else:
             assert self.train_pixel_sampler is not None
@@ -146,8 +146,10 @@ class SAMNERFDataManager(VanillaDataManager):  # pylint: disable=abstract-method
         ray_bundle = self.train_ray_generator(ray_indices)
 
         batch["clip"], clip_scale = self.clip_interpolator(ray_indices)
+        batch["clip"] = batch["clip"].to(torch.float32)
+        ray_bundle.metadata["clip_scales"] = clip_scale.to(torch.float32)
         batch["dino"] = self.dino_dataloader(ray_indices)
-        ray_bundle.metadata["clip_scales"] = clip_scale
+        
         # assume all cameras have the same focal length and image width
         ray_bundle.metadata["fx"] = self.train_dataset.cameras[0].fx.item()
         ray_bundle.metadata["width"] = self.train_dataset.cameras[0].width.item()

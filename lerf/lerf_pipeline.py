@@ -2,6 +2,7 @@ import typing
 from dataclasses import dataclass, field
 from typing import Literal, Type
 
+import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
