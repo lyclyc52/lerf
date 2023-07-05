@@ -35,6 +35,7 @@ from rich.progress import Console
 CONSOLE = Console(width=120)
 
 from samnerf.data.utils.dino_dataloader import DinoDataloader
+from samnerf.data.utils.sam_dataloader import SAMDataloader
 from samnerf.data.utils.pyramid_embedding_dataloader import PyramidEmbeddingDataloader
 from samnerf.encoders.image_encoder import BaseImageEncoder
 from samnerf.helper import *
@@ -96,6 +97,9 @@ class SAMNERFDataManager(VanillaDataManager):  # pylint: disable=abstract-method
             cache_path=dino_cache_path,
         )
         torch.cuda.empty_cache()
+        
+        # self.sam_dataloader = SAMDataloader()
+        
         self.clip_interpolator = PyramidEmbeddingDataloader(
             image_list=images,
             device=self.device,
@@ -142,6 +146,8 @@ class SAMNERFDataManager(VanillaDataManager):  # pylint: disable=abstract-method
         
         batch['use_contrastive_loss'] = use_contrastive_loss
         batch['iter'] = self.train_count
+        
+        
         ray_indices = batch["indices"]
         ray_bundle = self.train_ray_generator(ray_indices)
 

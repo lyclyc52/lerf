@@ -1,11 +1,11 @@
 [project]
-name = "samnerf"
+name = "samnerf_v2"
 version = "0.1.1"
 
 
 
 [tool.setuptools.packages.find]
-include = ["samnerf*"]
+include = ["samnerf_v2*"]
 
 [project.entry-points.'nerfstudio.method_configs']
-samnerf = 'samnerf.samnerf_config:samnerf_method'
+samnerf_v2 = 'samnerf_v2.samnerf_config:samnerf_method'

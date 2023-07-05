@@ -28,9 +28,9 @@ class SAMNERFModelConfig(NerfactoModelConfig):
     clip_loss_weight: float = 0.1
     
     contrastive_sample_n = 1 # size of constrastive sample points
-    contrastive_temperature = 0.5 
+    contrastive_temperature = 0.5
     contrastive_loss_weight: float = 0.01
-    postive_threshold: float = 0.7 # threshold to distinguish positive and negative for contrastive learning
+    postive_threshold: float = 0.6 # threshold to distinguish positive and negative for contrastive learning
     
     n_scales: int = 30
     max_scale: float = 1.5
@@ -39,10 +39,6 @@ class SAMNERFModelConfig(NerfactoModelConfig):
     hashgrid_layers: Tuple[int] = (12, 12)
     hashgrid_resolutions: Tuple[Tuple[int]] = ((16, 128), (128, 512))
     hashgrid_sizes: Tuple[int] = (19, 19)
-    
-    
-    
-
 
 class SAMNERFModel(NerfactoModel):
     config: SAMNERFModelConfig
@@ -72,6 +68,7 @@ class SAMNERFModel(NerfactoModel):
 
         # probably not a good idea bc it's prob going to be a lot of memory
         n_phrases = len(self.image_encoder.positives)
+        # print(self.image_encoder.positives)
         n_phrases_maxs = [None for _ in range(n_phrases)]
         n_phrases_sims = [None for _ in range(n_phrases)]
         for i, scale in enumerate(scales_list):
@@ -226,8 +223,9 @@ class SAMNERFModel(NerfactoModel):
 
 
     def get_loss_dict(self, outputs, batch, metrics_dict=None):
-        loss_dict = super().get_loss_dict(outputs, batch, metrics_dict)
+        loss_dict = {}
         if self.training:
+
             unreduced_clip = self.config.clip_loss_weight * torch.nn.functional.huber_loss(
                 outputs["clip"], batch["clip"], delta=1.25, reduction="none"
             )
@@ -246,7 +244,16 @@ class SAMNERFModel(NerfactoModel):
                 
                 self_support_mask = self.self_support(img_ray_1, support_ray)
                 loss_dict['contrastive_loss'] =  self.config.contrastive_loss_weight * self.contrastive_loss(self_support_mask, img_ray_1, support_ray) 
-            
+            else:
+                loss_dict = {**loss_dict, **super().get_loss_dict(outputs, batch, metrics_dict)}
+        
+            # print('clip loss: ', loss_dict["clip_loss"])
+            for key in loss_dict:
+                if(torch.isnan(loss_dict[key])):
+                    print("error:", key)
+                    exit()
+                # print(loss_dict)
+                
                 
         return loss_dict
 

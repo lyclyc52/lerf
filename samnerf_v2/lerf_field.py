@@ -2,7 +2,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
-from lerf.lerf_fieldheadnames import LERFFieldHeadNames
+from samnerf_v2.lerf_fieldheadnames import LERFFieldHeadNames
 from torch import nn
 from torch.nn.parameter import Parameter
 from torchtyping import TensorType

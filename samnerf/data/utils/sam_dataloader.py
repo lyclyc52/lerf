@@ -1,18 +1,17 @@
 import typing
 
 import torch
+
+from segment_anything import sam_model_registry, SamAutomaticMaskGenerator, SamPredictor
+
 from samnerf.data.utils.dino_extractor import ViTExtractor
 from samnerf.data.utils.feature_dataloader import FeatureDataloader
 from tqdm import tqdm
 
 
-class DinoDataloader(FeatureDataloader):
-    dino_model_type = "dino_vits8"
-    dino_stride = 8
-    dino_load_size = 500
-    dino_layer = 11
-    dino_facet = "key"
-    dino_bin = False
+class SAMDataloader(FeatureDataloader):
+    sam_checkpoint = "sam_vit_h_4b8939.pth"
+    model_type = "vit_h"
 
     def __init__(
         self,
@@ -25,20 +24,17 @@ class DinoDataloader(FeatureDataloader):
         super().__init__(cfg, device, image_list, cache_path)
 
     def create(self, image_list):
-        extractor = ViTExtractor(self.dino_model_type, self.dino_stride)
-        preproc_image_lst = extractor.preprocess(image_list, self.dino_load_size)[0].to(self.device)
+        sam = sam_model_registry[self.model_type](checkpoint=self.sam_checkpoint)
+        
+        sam.to(device=self.device)
 
+        mask_generator = SamAutomaticMaskGenerator(sam)
+        
         dino_embeds = []
-        for image in tqdm(preproc_image_lst, desc="dino", total=len(image_list), leave=False):
+        for image in tqdm(preproc_image_lst, desc="SAM", total=len(image_list), leave=False):
             with torch.no_grad():
-                descriptors = extractor.extract_descriptors(
-                    image.unsqueeze(0),
-                    [self.dino_layer],
-                    self.dino_facet,
-                    self.dino_bin,
-                )
-            descriptors = descriptors.reshape(extractor.num_patches[0], extractor.num_patches[1], -1)
-            dino_embeds.append(descriptors.cpu().detach())
+                masks = mask_generator.generate(image)
+            dino_embeds.append(masks.cpu().detach())
 
         self.data = torch.stack(dino_embeds, dim=0)
 

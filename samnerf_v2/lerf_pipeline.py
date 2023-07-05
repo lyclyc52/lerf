@@ -13,12 +13,12 @@ from nerfstudio.pipelines.base_pipeline import (
     VanillaPipelineConfig,
 )
 
-from lerf.data.lerf_datamanager import (
+from samnerf_v2.data.lerf_datamanager import (
     LERFDataManager,
     LERFDataManagerConfig,
 )
-from lerf.lerf import LERFModel, LERFModelConfig
-from lerf.encoders.image_encoder import BaseImageEncoderConfig, BaseImageEncoder
+from samnerf_v2.lerf import LERFModel, LERFModelConfig
+from samnerf_v2.encoders.image_encoder import BaseImageEncoderConfig, BaseImageEncoder
 
 
 @dataclass

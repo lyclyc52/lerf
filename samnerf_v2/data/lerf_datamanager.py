@@ -34,9 +34,9 @@ from rich.progress import Console
 
 CONSOLE = Console(width=120)
 
-from lerf.data.utils.dino_dataloader import DinoDataloader
-from lerf.data.utils.pyramid_embedding_dataloader import PyramidEmbeddingDataloader
-from lerf.encoders.image_encoder import BaseImageEncoder
+from samnerf_v2.data.utils.dino_dataloader import DinoDataloader
+from samnerf_v2.data.utils.pyramid_embedding_dataloader import PyramidEmbeddingDataloader
+from samnerf_v2.encoders.image_encoder import BaseImageEncoder
 from nerfstudio.data.datamanagers.base_datamanager import VanillaDataManager, VanillaDataManagerConfig
 
 
@@ -46,6 +46,9 @@ class LERFDataManagerConfig(VanillaDataManagerConfig):
     patch_tile_size_range: Tuple[int, int] = (0.05, 0.5)
     patch_tile_size_res: int = 7
     patch_stride_scaler: float = 0.5
+    
+    contrastive_starting_epoch: int = 2000
+    disable_contrastive: bool = False
 
 
 class LERFDataManager(VanillaDataManager):  # pylint: disable=abstract-method
@@ -106,8 +109,31 @@ class LERFDataManager(VanillaDataManager):  # pylint: disable=abstract-method
 
     def next_train(self, step: int) -> Tuple[RayBundle, Dict]:
         """Returns the next batch of data from the train dataloader."""
+
         self.train_count += 1
+        
+        use_contrastive_loss = step >= self.config.contrastive_starting_epoch and \
+                                not self.config.disable_contrastive
         image_batch = next(self.iter_train_image_dataloader)
+        # if use_contrastive_loss :  
+        # train_idx = torch.randint(0, image_batch['image'].size(0), (2,))     
+
+        # new_image_batch = {}
+        # new_image_batch['image'] = image_batch['image'][train_idx]
+        # new_image_batch['image_idx'] = image_batch['image_idx'][train_idx]
+        
+        # assert self.train_pixel_sampler is not None
+        # batch = self.train_pixel_sampler.sample(new_image_batch)
+        # batch['image_idx'] = new_image_batch['image_idx']
+        # ray_indices = batch["indices"]
+        # ray_bundle = self.train_ray_generator(ray_indices)
+        # batch["clip"], clip_scale = self.clip_interpolator(ray_indices)
+        # batch["dino"] = self.dino_dataloader(ray_indices)
+        # ray_bundle.metadata["clip_scales"] = clip_scale
+        # # assume all cameras have the same focal length and image width
+        # ray_bundle.metadata["fx"] = self.train_dataset.cameras[0].fx.item()
+        # ray_bundle.metadata["width"] = self.train_dataset.cameras[0].width.item()
+        # else:
         assert self.train_pixel_sampler is not None
         batch = self.train_pixel_sampler.sample(image_batch)
         ray_indices = batch["indices"]
@@ -118,4 +144,7 @@ class LERFDataManager(VanillaDataManager):  # pylint: disable=abstract-method
         # assume all cameras have the same focal length and image width
         ray_bundle.metadata["fx"] = self.train_dataset.cameras[0].fx.item()
         ray_bundle.metadata["width"] = self.train_dataset.cameras[0].width.item()
+        
+        batch['use_contrastive_loss'] = use_contrastive_loss
+
         return ray_bundle, batch

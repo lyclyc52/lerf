@@ -9,7 +9,7 @@ try:
 except ImportError:
     assert False, "open_clip is not installed, install it with `pip install open-clip-torch`"
 
-from lerf.encoders.image_encoder import (BaseImageEncoder,
+from samnerf_v2.encoders.image_encoder import (BaseImageEncoder,
                                          BaseImageEncoderConfig)
 from nerfstudio.viewer.server.viewer_elements import ViewerText
 

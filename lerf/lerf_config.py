@@ -10,7 +10,6 @@ from nerfstudio.engine.schedulers import ExponentialDecaySchedulerConfig
 from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.plugins.types import MethodSpecification
 
-from lerf.lerf_trainer import LERFTrainerConfig
 from lerf.data.lerf_datamanager import LERFDataManagerConfig
 from lerf.lerf import LERFModelConfig
 from lerf.lerf_pipeline import LERFPipelineConfig
@@ -21,16 +20,13 @@ Swap out the network config to use OpenCLIP or CLIP here.
 from lerf.encoders.clip_encoder import CLIPNetworkConfig
 from lerf.encoders.openclip_encoder import OpenCLIPNetworkConfig
 
-
-
 lerf_method = MethodSpecification(
-    config=LERFTrainerConfig(
+    config=TrainerConfig(
         method_name="lerf",
         steps_per_eval_batch=500,
-        steps_per_save=2000,
-        max_num_iterations=50000,
-        mixed_precision=False,
-        
+        steps_per_save=500,
+        max_num_iterations=30000,
+        mixed_precision=True,
         pipeline=LERFPipelineConfig(
             datamanager=LERFDataManagerConfig(
                 dataparser=NerfstudioDataParserConfig(train_split_fraction=0.99),
@@ -63,7 +59,7 @@ lerf_method = MethodSpecification(
             },
             "fields": {
                 "optimizer": RAdamOptimizerConfig(lr=1e-2, eps=1e-15),
-                "scheduler": ExponentialDecaySchedulerConfig(lr_final=1e-3, max_steps=50000),
+                "scheduler": ExponentialDecaySchedulerConfig(lr_final=1e-3, max_steps=30000),
             },
             "lerf": {
                 "optimizer": RAdamOptimizerConfig(lr=1e-2, eps=1e-15, weight_decay=1e-9),
@@ -114,7 +110,7 @@ lerf_method_big = MethodSpecification(
             },
             "lerf": {
                 "optimizer": RAdamOptimizerConfig(lr=1e-2, eps=1e-15, weight_decay=1e-9),
-                "scheduler": ExponentialDecaySchedulerConfig(lr_final=1e-3, max_steps=4000),
+                "scheduler": ExponentialDecaySchedulerConfig(lr_final=1e-3, max_steps=3000),
             },
         },
         viewer=ViewerConfig(num_rays_per_chunk=1 << 15),

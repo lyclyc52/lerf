@@ -5,6 +5,8 @@ from typing import Dict, List, Tuple, Type
 import numpy as np
 import open_clip
 import torch
+import torch.nn.functional as F
+
 from nerfstudio.cameras.rays import RayBundle, RaySamples
 from nerfstudio.data.scene_box import SceneBox
 from nerfstudio.field_components.field_heads import FieldHeadNames
@@ -16,11 +18,11 @@ from nerfstudio.utils.colormaps import ColormapOptions, apply_colormap
 from nerfstudio.viewer.server.viewer_elements import *
 from torch.nn import Parameter
 
-from lerf.encoders.image_encoder import BaseImageEncoder
-from lerf.lerf_field import LERFField
-from lerf.lerf_fieldheadnames import LERFFieldHeadNames
-from lerf.lerf_renderers import CLIPRenderer, MeanRenderer
-
+from samnerf_v2.encoders.image_encoder import BaseImageEncoder
+from samnerf_v2.lerf_field import LERFField
+from samnerf_v2.lerf_fieldheadnames import LERFFieldHeadNames
+from samnerf_v2.lerf_renderers import CLIPRenderer, MeanRenderer
+from samnerf_v2.helper import print_shape
 
 @dataclass
 class LERFModelConfig(NerfactoModelConfig):
@@ -28,6 +30,12 @@ class LERFModelConfig(NerfactoModelConfig):
     clip_loss_weight: float = 0.1
     n_scales: int = 30
     max_scale: float = 1.5
+    
+    contrastive_sample_n = 1 # size of constrastive sample points
+    contrastive_temperature = 0.5
+    contrastive_loss_weight: float = 0.03
+    postive_threshold: float = 0.6 # threshold to distinguish positive and negative for contrastive learning
+    
     """maximum scale used to compute relevancy with"""
     num_lerf_samples: int = 24
     hashgrid_layers: Tuple[int] = (12, 12)
@@ -82,7 +90,7 @@ class LERFModel(NerfactoModel):
         # TODO smoothen this out
         if preset_scales is not None:
             assert len(preset_scales) == len(self.image_encoder.positives)
-            scales_list = torch.tensor(preset_scales)
+            scales_list = preset_scales.clone().detach()
         else:
             scales_list = torch.linspace(0.0, self.config.max_scale, self.config.n_scales)
 
@@ -114,6 +122,7 @@ class LERFModel(NerfactoModel):
         ray_samples_list.append(ray_samples)
 
         nerfacto_field_outputs, outputs, weights = self._get_outputs_nerfacto(ray_samples)
+
         lerf_weights, best_ids = torch.topk(weights, self.config.num_lerf_samples, dim=-2, sorted=False)
 
         def gather_fn(tens):
@@ -215,11 +224,15 @@ class LERFModel(NerfactoModel):
                 # TODO: handle lists of tensors as well
                 continue
             outputs[output_name] = torch.cat(outputs_list).view(image_height, image_width, -1)  # type: ignore
+            
+            
         for i in range(len(self.image_encoder.positives)):
             p_i = torch.clip(outputs[f"relevancy_{i}"] - 0.5, 0, 1)
             outputs[f"composited_{i}"] = apply_colormap(p_i / (p_i.max() + 1e-6), ColormapOptions("turbo"))
             mask = (outputs["relevancy_0"] < 0.5).squeeze()
             outputs[f"composited_{i}"][mask, :] = outputs["rgb"][mask, :]
+            
+        
         return outputs
 
     def _get_outputs_nerfacto(self, ray_samples: RaySamples):
@@ -236,6 +249,7 @@ class LERFModel(NerfactoModel):
             "depth": depth,
         }
 
+
         return field_outputs, outputs, weights
 
     def get_loss_dict(self, outputs, batch, metrics_dict=None):
@@ -247,9 +261,116 @@ class LERFModel(NerfactoModel):
             loss_dict["clip_loss"] = unreduced_clip.sum(dim=-1).nanmean()
             unreduced_dino = torch.nn.functional.mse_loss(outputs["dino"], batch["dino"], reduction="none")
             loss_dict["dino_loss"] = unreduced_dino.sum(dim=-1).nanmean()
+            
+            if batch['use_contrastive_loss']:
+                # img_ray_0 = torch.where(batch['indices'][:, 0] == batch['image_idx'][0].to(batch['indices'].device))
+                # img_ray_1 = torch.where(batch['indices'][:, 0] == batch['image_idx'][1].to(batch['indices'].device))
+                # img_ray_0 = outputs["clip"][img_ray_0]
+                # img_ray_1 = outputs["clip"][img_ray_1]
+                
+                # support_ray = torch.randint(0, img_ray_0.size(0), (self.config.contrastive_sample_n,))
+                # support_ray = img_ray_0[support_ray].detach()
+                
+                # self_support_mask = self.self_support(img_ray_1, support_ray)
+                # loss_dict['contrastive_loss'] =  self.config.contrastive_loss_weight * self.contrastive_loss(self_support_mask, img_ray_1, support_ray) 
+                
+                
+                support_ray_index = torch.randint(0,  outputs["clip"].size(0), (self.config.contrastive_sample_n,))
+                support_ray = outputs["clip"][support_ray_index].detach()
+                img_ray_1 = torch.cat([outputs["clip"][0:support_ray_index], outputs["clip"][support_ray_index+1:]])
+                self_support_mask = self.self_support(img_ray_1, support_ray)
+                loss_dict['contrastive_loss'] =  self.config.contrastive_loss_weight * self.contrastive_loss(self_support_mask, img_ray_1, support_ray.detach()) 
+    
+        
         return loss_dict
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         param_groups = super().get_param_groups()
         param_groups["lerf"] = list(self.lerf_field.parameters())
         return param_groups
+
+    def contrastive_loss(self, mask, features, support_feature):
+        """
+        Referring to CLIP https://arxiv.org/pdf/2103.00020.pdf
+        Args:
+            mask: [N, 1]
+            features: [N, K]
+            support_feature: [1, K]
+        """
+        labels = (mask> self.config.postive_threshold).to(torch.float32)
+        
+        similarity = features @ support_feature.T * torch.exp(torch.tensor(self.config.contrastive_temperature))
+        contrastive_loss = torch.nn.functional.binary_cross_entropy_with_logits(similarity[..., 0], labels)
+        
+        return contrastive_loss
+    
+    def similar_func(self, feature_q, support):
+        phrases_embeds = torch.cat([support, self.image_encoder.neg_embeds], dim=0)
+        p = phrases_embeds.to(feature_q.dtype)  # phrases x 512
+        output = torch.mm(feature_q, p.T)  # rays x phrases
+        positive_vals = output[..., :1]  # rays x 1
+        negative_vals = output[..., 1:]  # rays x N_phrase
+        repeated_pos = positive_vals.repeat(1, len(self.image_encoder.negatives))  # rays x N_phrase
+
+        sims = torch.stack((repeated_pos, negative_vals), dim=-1)  # rays x N-phrase x 2
+        softmax = torch.softmax(10 * sims, dim=-1)  # rays x n-phrase x 2
+        best_id = softmax[..., 0].argmin(dim=1)  # rays x 2
+        return torch.gather(softmax, 1, best_id[..., None, None].expand(best_id.shape[0], len(self.image_encoder.negatives), 2))[
+            :, 0, :
+        ][..., 0:1]
+    def self_support(self, feature_q, support):
+        """
+        Args:
+            feature:[N, K]
+            support:[1, K]
+        """
+
+        # pred_1 = F.cosine_similarity(feature_q, support, dim=1) # 
+
+        pred_1 = self.similar_func(feature_q, support)
+
+        fg_thres = 0.7 #0.9 #0.6
+        bg_thres = 0.6 #0.6
+        cur_feat = feature_q
+        f_h, f_w = feature_q.shape
+        
+        
+        if (pred_1 > fg_thres).sum() > 0:
+            fg_feat = cur_feat[(pred_1>fg_thres)] # [N_f, K]
+        else:
+            fg_feat = cur_feat[torch.topk(pred_1, 12).indices] 
+        if ((1 - pred_1) > bg_thres).sum() > 0:
+            bg_feat = cur_feat[((1 - pred_1)>bg_thres)] # [N_b, K]
+        else:
+            bg_feat = cur_feat[torch.topk((1 - pred_1), 12).indices] 
+                # global proto
+                
+                
+        fg_proto = fg_feat.mean(0)
+        bg_proto = bg_feat.mean(-1)
+
+        # local proto
+        # fg_feat_norm = fg_feat / torch.norm(fg_feat, 2, 0, True) # 1024, N1
+        # bg_feat_norm = bg_feat / torch.norm(bg_feat, 2, 0, True) # 1024, N2
+        # cur_feat_norm = cur_feat / torch.norm(cur_feat, 2, 0, True) # 1024, N3
+
+        fg_feat_t = fg_feat.t() 
+        bg_feat_t = bg_feat.t() 
+        
+        fg_sim = torch.matmul(cur_feat, fg_feat_t) * 2.0 # N, N_f
+        bg_sim = torch.matmul(cur_feat, bg_feat_t) * 2.0 # N, N_b
+
+        fg_sim = fg_sim.softmax(-1)
+        bg_sim = bg_sim.softmax(-1)
+
+        fg_proto_local = torch.matmul(fg_sim, fg_feat) # N, K
+        bg_proto_local = torch.matmul(bg_sim, bg_feat) # N, K
+
+        # SSFP_1, SSBP_1, ASFP_1, ASBP_1 = self_support_loss(img_ray_1, support_ray)
+        self_support = support * 0.5 + fg_proto * 0.5
+        
+        # self_support_mask = F.cosine_similarity(feature_q, self_support)
+        self_support_mask = self.similar_func(feature_q, self_support)
+
+                    
+        return self_support_mask

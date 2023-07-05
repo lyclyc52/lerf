@@ -26,7 +26,7 @@ samnerf_method = MethodSpecification(
     config=SAMNERFTrainerConfig(
         method_name="samnerf",
         steps_per_eval_batch=500,
-        steps_per_save=2000,
+        steps_per_save=500,
         max_num_iterations=30000,
         mixed_precision=False,
         use_grad_scaler=False,
@@ -39,7 +39,7 @@ samnerf_method = MethodSpecification(
                     mode="SO3xR3", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
                 ),
                 preload_model=True,
-                pretrain=False,
+                pretrain=True,
             ),
             model=SAMNERFModelConfig(
                 eval_num_rays_per_chunk=1 << 15,
@@ -68,7 +68,7 @@ samnerf_method = MethodSpecification(
             },
             "samnerf": {
                 "optimizer": RAdamOptimizerConfig(lr=1e-2, eps=1e-15, weight_decay=1e-9),
-                "scheduler": ExponentialDecaySchedulerConfig(lr_final=1e-3, max_steps=4000),
+                "scheduler": ExponentialDecaySchedulerConfig(lr_final=1e-3, max_steps=30000),
             },
         },
         viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
