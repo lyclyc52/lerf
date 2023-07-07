@@ -32,8 +32,8 @@ class LERFModelConfig(NerfactoModelConfig):
     max_scale: float = 1.5
     
     contrastive_sample_n = 1 # size of constrastive sample points
-    contrastive_temperature = 0.5
-    contrastive_loss_weight: float = 0.03
+    contrastive_temperature = 1
+    contrastive_loss_weight: float = 0.08
     postive_threshold: float = 0.6 # threshold to distinguish positive and negative for contrastive learning
     
     """maximum scale used to compute relevancy with"""
@@ -315,9 +315,10 @@ class LERFModel(NerfactoModel):
         sims = torch.stack((repeated_pos, negative_vals), dim=-1)  # rays x N-phrase x 2
         softmax = torch.softmax(10 * sims, dim=-1)  # rays x n-phrase x 2
         best_id = softmax[..., 0].argmin(dim=1)  # rays x 2
-        return torch.gather(softmax, 1, best_id[..., None, None].expand(best_id.shape[0], len(self.image_encoder.negatives), 2))[
+        score = torch.gather(softmax, 1, best_id[..., None, None].expand(best_id.shape[0], len(self.image_encoder.negatives), 2))[
             :, 0, :
-        ][..., 0:1]
+        ]
+        return score[..., 0]
     def self_support(self, feature_q, support):
         """
         Args:
@@ -326,7 +327,7 @@ class LERFModel(NerfactoModel):
         """
 
         # pred_1 = F.cosine_similarity(feature_q, support, dim=1) # 
-
+        # print_shape(pred_1)
         pred_1 = self.similar_func(feature_q, support)
 
         fg_thres = 0.7 #0.9 #0.6
