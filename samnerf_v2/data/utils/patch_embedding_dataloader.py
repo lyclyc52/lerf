@@ -2,8 +2,8 @@ import json
 
 import numpy as np
 import torch
-from lerf.data.utils.feature_dataloader import FeatureDataloader
-from lerf.encoders.image_encoder import BaseImageEncoder
+from .feature_dataloader import FeatureDataloader
+from samnerf_v2.encoders.image_encoder import BaseImageEncoder
 from tqdm import tqdm
 
 

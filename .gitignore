@@ -175,6 +175,7 @@ events.out.*
 # Data
 data
 !*/data
+scenes/
 
 # Misc
 old/
