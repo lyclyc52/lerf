@@ -5,6 +5,7 @@ from typing import Dict, List, Tuple, Type
 import numpy as np
 import open_clip
 import torch
+import imageio
 from nerfstudio.cameras.rays import RayBundle, RaySamples
 from nerfstudio.data.scene_box import SceneBox
 from nerfstudio.field_components.field_heads import FieldHeadNames
@@ -53,6 +54,13 @@ class LERFModel(NerfactoModel):
         )
 
         # populate some viewer logic
+        self.latest_clip_featuremap = None
+        self.latest_rgb = None
+        self.clip_save_path = ViewerText(name="Clip save path",
+                                         default_value="./clip_featuremap.npy")
+        self.save_clip_button = ViewerButton(name="Save clip feature", 
+                                             cb_hook=self.save_clip_featuremap)
+
         # TODO use the values from this code to select the scale
         # def scale_cb(element):
         #     self.config.n_scales = element.value
@@ -77,6 +85,16 @@ class LERFModel(NerfactoModel):
         #     self.hardcoded_scale_slider.set_disabled(not element.value)
 
         # self.single_scale_box = ViewerCheckbox("Single Scale", False, cb_hook=single_scale_cb)
+
+    def save_clip_featuremap(self, button):
+        np.save(self.clip_save_path.value, self.latest_clip_featuremap)
+        rgb_path = self.clip_save_path.value.replace(".npy", ".png")
+
+        rgb = self.latest_rgb * 255
+        rgb = rgb.astype(np.uint8)
+
+        imageio.imwrite(rgb_path, rgb)
+        print(f"Saved clip featuremap to {self.clip_save_path.value}")
 
     def get_max_across(self, ray_samples, weights, hashgrid_field, scales_shape, preset_scales=None):
         # TODO smoothen this out
@@ -162,6 +180,11 @@ class LERFModel(NerfactoModel):
                 outputs["raw_relevancy"] = max_across  # N x B x 1
                 outputs["best_scales"] = best_scales.to(self.device)  # N
 
+                # Stores clip feature for debugging
+                outputs["clip"] = self.renderer_clip(
+                   embeds=lerf_field_outputs[LERFFieldHeadNames.CLIP], weights=lerf_weights.detach()
+                )
+
         return outputs
 
     @torch.no_grad()
@@ -215,11 +238,19 @@ class LERFModel(NerfactoModel):
                 # TODO: handle lists of tensors as well
                 continue
             outputs[output_name] = torch.cat(outputs_list).view(image_height, image_width, -1)  # type: ignore
+
+            # print(f"output {output_name} shape {outputs[output_name].shape}")
+
         for i in range(len(self.image_encoder.positives)):
             p_i = torch.clip(outputs[f"relevancy_{i}"] - 0.5, 0, 1)
             outputs[f"composited_{i}"] = apply_colormap(p_i / (p_i.max() + 1e-6), ColormapOptions("turbo"))
             mask = (outputs["relevancy_0"] < 0.5).squeeze()
             outputs[f"composited_{i}"][mask, :] = outputs["rgb"][mask, :]
+
+        if image_width >= 512:
+            self.latest_clip_featuremap = outputs['clip'].detach().cpu().numpy()
+            self.latest_rgb = outputs['rgb'].detach().cpu().numpy()
+
         return outputs
 
     def _get_outputs_nerfacto(self, ray_samples: RaySamples):
