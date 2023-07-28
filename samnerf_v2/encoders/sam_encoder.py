@@ -3,6 +3,8 @@ from typing import Tuple, Type
 
 import torch
 import torchvision
+import numpy as np
+
 
 try:
     from segment_anything import sam_model_registry, SamPredictor
@@ -34,7 +36,7 @@ class SAMNetwork(BaseImageEncoder):
         
         self.positive_input = ViewerText("LERF Positives", "", cb_hook=self.gui_cb)
 
-        self.positives = self.positive_input.value.split(";")
+        self.positives = self.set_positives(self.positive_input.value)
 
 
     @property
@@ -49,11 +51,12 @@ class SAMNetwork(BaseImageEncoder):
         self.set_positives(element.value.split(";"))
 
     def set_positives(self, text_list):
-        self.positives = text_list
-        with torch.no_grad():
-            tok_phrases = torch.cat([self.tokenizer(phrase) for phrase in self.positives]).to("cuda")
-            self.pos_embeds = self.model.encode_text(tok_phrases)
-        self.pos_embeds /= self.pos_embeds.norm(dim=-1, keepdim=True)
+        positives = []
+        for p in text_list:
+            p = p.split(',')
+            coord = [int(j) for j in p]
+            positives.append(np.array(coord))
+        return positives
 
     def get_relevancy(self, embed: torch.Tensor, positive_id: int) -> torch.Tensor:
         phrases_embeds = torch.cat([self.pos_embeds, self.neg_embeds], dim=0)
@@ -71,6 +74,20 @@ class SAMNetwork(BaseImageEncoder):
         ]
 
     def encode_image(self, input):
-        self.model.reset_image()
         self.model.set_image(input)
         return self.model.features
+    
+    def decode_feature(self, feature, image, index):
+        
+        if not self.model.is_image_set:
+            self.model.set_image(image)
+        feature = feature.permute(2,0,1)
+        self.model.set_torch_feature(feature)
+        positive = np.array([self.positives[index]])
+        masks, scores, logits = self.model.predict(
+            point_coords=positive,
+            point_labels=np.array([1]),
+            multimask_output=True,
+        )
+        return masks, scores, logits
+            

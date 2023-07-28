@@ -23,7 +23,8 @@ from samnerf_v2.lerf_field import LERFField
 from samnerf_v2.lerf_fieldheadnames import LERFFieldHeadNames
 from samnerf_v2.lerf_renderers import CLIPRenderer, MeanRenderer
 from samnerf_v2.helper import print_shape
-
+import imageio
+from typing import Literal
 @dataclass
 class LERFModelConfig(NerfactoModelConfig):
     _target: Type = field(default_factory=lambda: LERFModel)
@@ -31,6 +32,7 @@ class LERFModelConfig(NerfactoModelConfig):
     n_scales: int = 30
     max_scale: float = 1.5
     
+    feature_type: Literal['clip', 'xdecoder', 'sam'] = 'clip' 
     contrastive_sample_n = 1 # size of constrastive sample points
     contrastive_temperature = 1
     contrastive_loss_weight: float = 0.08
@@ -58,7 +60,15 @@ class LERFModel(NerfactoModel):
             self.config.hashgrid_sizes,
             self.config.hashgrid_resolutions,
             clip_n_dims=self.image_encoder.embedding_dim,
+            feature_type=self.config.feature_type,
         )
+        
+        self.latest_featuremap = None
+        self.latest_rgb = None
+        self.feautre_save_path = ViewerText(name="Feature save path",
+                                         default_value="./debug/featuremap.npy")
+        self.save_feature_button = ViewerButton(name="Save feature", 
+                                             cb_hook=self.save_featuremap)
 
         # populate some viewer logic
         # TODO use the values from this code to select the scale
@@ -85,6 +95,15 @@ class LERFModel(NerfactoModel):
         #     self.hardcoded_scale_slider.set_disabled(not element.value)
 
         # self.single_scale_box = ViewerCheckbox("Single Scale", False, cb_hook=single_scale_cb)
+    def save_featuremap(self, button):
+        np.save(self.clip_save_path.value, self.latest_featuremap)
+        rgb_path = self.clip_save_path.value.replace(".npy", ".png")
+
+        rgb = self.latest_rgb * 255
+        rgb = rgb.astype(np.uint8)
+
+        imageio.imwrite(rgb_path, rgb)
+        print(f"Saved clip featuremap to {self.clip_save_path.value}")
 
     def get_max_across(self, ray_samples, weights, hashgrid_field, scales_shape, preset_scales=None):
         # TODO smoothen this out
@@ -132,12 +151,14 @@ class LERFModel(NerfactoModel):
         lerf_samples = ray_samples._apply_fn_to_fields(gather_fn, dataclass_fn)
 
         if self.training:
-            clip_scales = ray_bundle.metadata["clip_scales"]
-            clip_scales = clip_scales[..., None]
-            dist = lerf_samples.spacing_to_euclidean_fn(lerf_samples.spacing_starts.squeeze(-1)).unsqueeze(-1)
-            clip_scales = clip_scales * ray_bundle.metadata["width"] * (1 / ray_bundle.metadata["fx"]) * dist
+            if self.config.feature_type == 'clip':
+                clip_scales = ray_bundle.metadata["clip_scales"]
+                clip_scales = clip_scales[..., None]
+                dist = lerf_samples.spacing_to_euclidean_fn(lerf_samples.spacing_starts.squeeze(-1)).unsqueeze(-1)
+                clip_scales = clip_scales * ray_bundle.metadata["width"] * (1 / ray_bundle.metadata["fx"]) * dist
         else:
-            clip_scales = torch.ones_like(lerf_samples.spacing_starts, device=self.device)
+            if self.config.feature_type == 'clip':
+                clip_scales = torch.ones_like(lerf_samples.spacing_starts, device=self.device)
 
         override_scales = (
             None if "override_scales" not in ray_bundle.metadata else ray_bundle.metadata["override_scales"]
@@ -148,12 +169,15 @@ class LERFModel(NerfactoModel):
             outputs["ray_samples_list"] = ray_samples_list
         for i in range(self.config.num_proposal_iterations):
             outputs[f"prop_depth_{i}"] = self.renderer_depth(weights=weights_list[i], ray_samples=ray_samples_list[i])
-
-        lerf_field_outputs = self.lerf_field.get_outputs(lerf_samples, clip_scales)
+        
+        if self.config.feature_type == 'clip':
+            lerf_field_outputs = self.lerf_field.get_outputs(lerf_samples, clip_scales)
+        elif self.config.feature_type == 'sam':
+            lerf_field_outputs = self.lerf_field.get_outputs(lerf_samples)
 
         if self.training:
             outputs["clip"] = self.renderer_clip(
-                embeds=lerf_field_outputs[LERFFieldHeadNames.CLIP], weights=lerf_weights.detach()
+                embeds=lerf_field_outputs[LERFFieldHeadNames.FEATURE], weights=lerf_weights.detach()
             )
             outputs["dino"] = self.renderer_mean(
                 embeds=lerf_field_outputs[LERFFieldHeadNames.DINO], weights=lerf_weights.detach()
@@ -161,16 +185,24 @@ class LERFModel(NerfactoModel):
 
         if not self.training:
             with torch.no_grad():
-                max_across, best_scales = self.get_max_across(
-                    lerf_samples,
-                    lerf_weights,
-                    lerf_field_outputs[LERFFieldHeadNames.HASHGRID],
-                    clip_scales.shape,
-                    preset_scales=override_scales,
-                )
-                outputs["raw_relevancy"] = max_across  # N x B x 1
-                outputs["best_scales"] = best_scales.to(self.device)  # N
-
+                if self.config.feature_type == 'clip':
+                    max_across, best_scales = self.get_max_across(
+                        lerf_samples,
+                        lerf_weights,
+                        lerf_field_outputs[LERFFieldHeadNames.HASHGRID],
+                        clip_scales.shape,
+                        preset_scales=override_scales,
+                    )
+                    outputs["raw_relevancy"] = max_across  # N x B x 1
+                    outputs["best_scales"] = best_scales.to(self.device)  # N
+                    
+                    outputs["feature"] = self.renderer_clip(
+                        embeds=lerf_field_outputs[LERFFieldHeadNames.FEATURE], weights=lerf_weights.detach()
+                    )
+                elif self.config.feature_type == 'sam':
+                    outputs["feature"] = self.renderer_clip(
+                        embeds=lerf_field_outputs[LERFFieldHeadNames.FEATURE], weights=lerf_weights.detach()
+                    )
         return outputs
 
     @torch.no_grad()
@@ -183,6 +215,7 @@ class LERFModel(NerfactoModel):
             camera_ray_bundle: ray bundle to calculate outputs over
         """
         # TODO(justin) implement max across behavior
+        
         num_rays_per_chunk = self.config.eval_num_rays_per_chunk
         image_height, image_width = camera_ray_bundle.origins.shape[:2]
         num_rays = len(camera_ray_bundle)
@@ -193,21 +226,24 @@ class LERFModel(NerfactoModel):
             ray_bundle = camera_ray_bundle.get_row_major_sliced_ray_bundle(start_idx, end_idx)
             outputs = self.forward(ray_bundle=ray_bundle)
             # take the best scale for each query across each ray bundle
-            if i == 0:
-                best_scales = outputs["best_scales"]
-                best_relevancies = [m.max() for m in outputs["raw_relevancy"]]
-            else:
-                for phrase_i in range(outputs["best_scales"].shape[0]):
-                    m = outputs["raw_relevancy"][phrase_i, ...].max()
-                    if m > best_relevancies[phrase_i]:
-                        best_scales[phrase_i] = outputs["best_scales"][phrase_i]
-                        best_relevancies[phrase_i] = m
+            
+            if self.config.feature_type == 'clip':
+                if i == 0:
+                    best_scales = outputs["best_scales"]
+                    best_relevancies = [m.max() for m in outputs["raw_relevancy"]]
+                else:
+                    for phrase_i in range(outputs["best_scales"].shape[0]):
+                        m = outputs["raw_relevancy"][phrase_i, ...].max()
+                        if m > best_relevancies[phrase_i]:
+                            best_scales[phrase_i] = outputs["best_scales"][phrase_i]
+                            best_relevancies[phrase_i] = m
         # re-render the max_across outputs using the best scales across all batches
         for i in range(0, num_rays, num_rays_per_chunk):
             start_idx = i
             end_idx = i + num_rays_per_chunk
             ray_bundle = camera_ray_bundle.get_row_major_sliced_ray_bundle(start_idx, end_idx)
-            ray_bundle.metadata["override_scales"] = best_scales
+            if self.config.feature_type == 'clip':
+                ray_bundle.metadata["override_scales"] = best_scales
             outputs = self.forward(ray_bundle=ray_bundle)
             # standard nerfstudio concatting
             for output_name, output in outputs.items():  # type: ignore
@@ -225,12 +261,20 @@ class LERFModel(NerfactoModel):
                 continue
             outputs[output_name] = torch.cat(outputs_list).view(image_height, image_width, -1)  # type: ignore
             
-            
+        
         for i in range(len(self.image_encoder.positives)):
-            p_i = torch.clip(outputs[f"relevancy_{i}"] - 0.5, 0, 1)
-            outputs[f"composited_{i}"] = apply_colormap(p_i / (p_i.max() + 1e-6), ColormapOptions("turbo"))
-            mask = (outputs["relevancy_0"] < 0.5).squeeze()
-            outputs[f"composited_{i}"][mask, :] = outputs["rgb"][mask, :]
+            if self.config.feature_type == 'clip':
+                p_i = torch.clip(outputs[f"relevancy_{i}"] - 0.5, 0, 1)
+                outputs[f"composited_{i}"] = apply_colormap(p_i / (p_i.max() + 1e-6), ColormapOptions("turbo"))
+                mask = (outputs["relevancy_0"] < 0.5).squeeze()
+                outputs[f"composited_{i}"][mask, :] = outputs["rgb"][mask, :]
+            elif self.config.feature_type == 'sam':
+                masks, scores, logits = self.image_encoder.decode(output['feature'], outputs['rgb'], i)
+                print_shape(masks)
+            
+        if image_width >= 512:
+            self.latest_featuremap = outputs['feature'].detach().cpu().numpy()
+            self.latest_rgb = outputs['rgb'].detach().cpu().numpy()
             
         
         return outputs

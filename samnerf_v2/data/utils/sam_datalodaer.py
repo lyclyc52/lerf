@@ -8,7 +8,7 @@ from lerf.data.utils.feature_dataloader import FeatureDataloader
 from lerf.data.utils.patch_embedding_dataloader import PatchEmbeddingDataloader
 from lerf.encoders.image_encoder import BaseImageEncoder
 from tqdm import tqdm
-
+import cv2
 
 class SAMDataloader(FeatureDataloader):
     def __init__(
@@ -28,7 +28,8 @@ class SAMDataloader(FeatureDataloader):
         self.tile_sizes = torch.linspace(*cfg["tile_size_range"], cfg["tile_size_res"]).to(device)
         self.strider_scaler_list = [self._stride_scaler(tr.item(), cfg["stride_scaler"]) for tr in self.tile_sizes]
 
-        self.feature_scale = np.max(np.array(cfg["image_shape"])) / 64
+        self.feature_size = 64
+        self.feature_scale = np.max(np.array(cfg["image_shape"])) / self.feature_size
 
 
         self.model = model
@@ -65,8 +66,10 @@ class SAMDataloader(FeatureDataloader):
 
     def create(self, image_list):
         for img in image_list:
+            img = (img.permute(1,2,0).cpu().numpy() * 255).astype(np.uint8)
             feature = self.model.encode_image(img)
             self.feature_list.append(feature)
+            
 
         self.feature_list = torch.cat(self.feature_list).to(self.device)
 
@@ -86,11 +89,13 @@ class SAMDataloader(FeatureDataloader):
         
         x_ind = torch.floor(feature_coord[:, 0]).long()
         y_ind = torch.floor(feature_coord[:, 1]).long()
-        
-        topleft = self.feature_list[img_ind, x_ind, y_ind].to(self.device)
-        topright = self.feature_list[img_ind, x_ind + 1, y_ind].to(self.device)
-        botleft = self.feature_list[img_ind, x_ind, y_ind + 1].to(self.device)
-        botright = self.feature_list[img_ind, x_ind + 1, y_ind + 1].to(self.device)
+        x_left, x_right = x_ind, torch.where(x_ind + 1 < self.feature_size - 1, x_ind + 1, self.feature_size - 1)
+        y_top, y_bot = y_ind, torch.where(y_ind + 1 < self.feature_size - 1, y_ind + 1, self.feature_size - 1)
+
+        topleft = self.feature_list[img_ind, :, x_left, y_top].to(self.device)
+        topright = self.feature_list[img_ind, :, x_right, y_top].to(self.device)
+        botleft = self.feature_list[img_ind, :,  x_left, y_bot].to(self.device)
+        botright = self.feature_list[img_ind, :, x_right, y_bot].to(self.device)
         
         
         right_w = (feature_coord[:, 0] - x_ind).to(self.device)  

@@ -48,9 +48,7 @@ class LERFDataManagerConfig(VanillaDataManagerConfig):
     patch_tile_size_range: Tuple[int, int] = (0.05, 0.5)
     patch_tile_size_res: int = 7
     patch_stride_scaler: float = 0.5
-    
-    feature_name: Literal['clip', 'xdecoder', 'sam'] = 'clip' 
-    
+    feature_type: Literal['clip', 'xdecoder', 'sam'] = 'clip' 
     contrastive_starting_epoch: int = 2000
     disable_contrastive: bool = False
 
@@ -97,8 +95,9 @@ class LERFDataManager(VanillaDataManager):  # pylint: disable=abstract-method
             cache_path=dino_cache_path,
         )
         torch.cuda.empty_cache()
+        self.feature_type = self.config.feature_type
         
-        if self.config.feature_name == "clip":
+        if self.feature_type == "clip":
             self.feature_interpolator = PyramidEmbeddingDataloader(
                 image_list=images,
                 device=self.device,
@@ -112,7 +111,7 @@ class LERFDataManager(VanillaDataManager):  # pylint: disable=abstract-method
                 cache_path=clip_cache_path,
                 model=self.image_encoder,
             )
-        elif self.config.feature_name == 'xdecoder':
+        elif self.feature_type == 'xdecoder':
             self.feature_interpolator = XDecoderDataloader(
                 image_list=images,
                 device=self.device,
@@ -126,7 +125,7 @@ class LERFDataManager(VanillaDataManager):  # pylint: disable=abstract-method
                 cache_path=clip_cache_path,
                 model=self.image_encoder,
             )
-        elif self.config.feature_name == 'sam':
+        elif self.feature_type == 'sam':
             self.feature_interpolator = SAMDataloader(
                 image_list=images,
                 device=self.device,
@@ -154,12 +153,11 @@ class LERFDataManager(VanillaDataManager):  # pylint: disable=abstract-method
         ray_indices = batch["indices"]
         ray_bundle = self.train_ray_generator(ray_indices)
         
-        batch['use_scale'] = False if self.config.feature_name == 'sam' else True
+        ray_bundle.metadata['use_scale'] = False if self.feature_type == 'sam' else True
         
-        if batch['use_scale']:
+        if ray_bundle.metadata['use_scale']:
             batch["clip"], clip_scale = self.feature_interpolator(ray_indices)
             ray_bundle.metadata["clip_scales"] = clip_scale
-            
         else:
             batch["clip"] = self.feature_interpolator(ray_indices)
         batch["dino"] = self.dino_dataloader(ray_indices)
@@ -171,3 +169,10 @@ class LERFDataManager(VanillaDataManager):  # pylint: disable=abstract-method
         batch['use_contrastive_loss'] = use_contrastive_loss
 
         return ray_bundle, batch
+    
+    
+    def next_eval(self, step: int) -> Tuple[RayBundle, Dict]:
+        ray_bundle, batch =  super().next_eval(step)
+        ray_bundle.metadata['use_scale'] = False if self.feature_type == 'sam' else True
+        return ray_bundle, batch
+        

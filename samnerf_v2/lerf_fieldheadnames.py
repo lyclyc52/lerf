@@ -4,5 +4,5 @@ from enum import Enum
 class LERFFieldHeadNames(Enum):
     """Possible field outputs"""
     HASHGRID = "hashgrid"
-    CLIP = "clip"
+    FEATURE = 'feature'
     DINO = "dino"
