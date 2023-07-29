@@ -41,7 +41,7 @@ class LERFPipelineConfig(VanillaPipelineConfig):
     """specifies the model config"""
     feature_type: Literal['clip', 'xdecoder', 'sam'] = 'clip'
     """specifies the vision-language network config""" 
-
+    use_contrastive: bool = False
 
 
 class LERFPipeline(VanillaPipeline):
@@ -61,6 +61,9 @@ class LERFPipeline(VanillaPipeline):
 
         self.config.datamanager.feature_type = self.config.feature_type
         self.config.model.feature_type = self.config.feature_type
+        
+        self.config.datamanager.use_contrastive = self.config.use_contrastive
+        self.config.model.use_contrastive = self.config.use_contrastive
 
         if self.config.feature_type == 'clip':
             network_config=OpenCLIPNetworkConfig(

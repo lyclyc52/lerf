@@ -49,8 +49,8 @@ class LERFDataManagerConfig(VanillaDataManagerConfig):
     patch_tile_size_res: int = 7
     patch_stride_scaler: float = 0.5
     feature_type: Literal['clip', 'xdecoder', 'sam'] = 'clip' 
-    contrastive_starting_epoch: int = 2000
-    disable_contrastive: bool = False
+    contrastive_starting_epoch: int = 5000
+    use_contrastive: bool = False
 
 
 class LERFDataManager(VanillaDataManager):  # pylint: disable=abstract-method
@@ -144,35 +144,50 @@ class LERFDataManager(VanillaDataManager):  # pylint: disable=abstract-method
 
         self.train_count += 1
         
-        use_contrastive_loss = step >= self.config.contrastive_starting_epoch and \
-                                not self.config.disable_contrastive
-        image_batch = next(self.iter_train_image_dataloader)
-
+        # image_batch includes all training images
+        image_batch = next(self.iter_train_image_dataloader) 
+        
+        cur_idx = step % image_batch['image_idx'].size(0)
+        use_contrastive_loss = self.config.use_contrastive and step > self.config.contrastive_starting_epoch
+        if use_contrastive_loss:
+            new_image_batch = {}
+            for k in image_batch.keys(): 
+                new_image_batch[k] = image_batch[k][cur_idx:cur_idx+1]
+            image_batch = new_image_batch
+            
         assert self.train_pixel_sampler is not None
         batch = self.train_pixel_sampler.sample(image_batch)
-        ray_indices = batch["indices"]
+
+        ray_indices = batch["indices"] # [image_idx, h, w]
+        # print(ray_indices[:, 1].max())
+        # print(ray_indices[:, 2].max())
+        # print()
+        
+        batch['use_contrastive_loss'] = use_contrastive_loss
+        if use_contrastive_loss:
+            sample_idx = torch.randint(0, ray_indices.size(0), (1,))
+            self.feature_interpolator.generate_mask(image_batch,batch["indices"][sample_idx])
+            batch['sample_idx'] = sample_idx
+            
         ray_bundle = self.train_ray_generator(ray_indices)
         
-        ray_bundle.metadata['use_scale'] = False if self.feature_type == 'sam' else True
-        
-        if ray_bundle.metadata['use_scale']:
-            batch["clip"], clip_scale = self.feature_interpolator(ray_indices)
+
+        if self.feature_type == 'clip':
+            batch["feature"], clip_scale = self.feature_interpolator(ray_indices)
             ray_bundle.metadata["clip_scales"] = clip_scale
-        else:
-            batch["clip"] = self.feature_interpolator(ray_indices)
+        elif self.feature_type == 'sam':
+            batch["feature"], batch["mask"] = self.feature_interpolator(ray_indices, batch['use_contrastive_loss'])
         batch["dino"] = self.dino_dataloader(ray_indices)
        
         # assume all cameras have the same focal length and image width
         ray_bundle.metadata["fx"] = self.train_dataset.cameras[0].fx.item()
         ray_bundle.metadata["width"] = self.train_dataset.cameras[0].width.item()
         
-        batch['use_contrastive_loss'] = use_contrastive_loss
 
         return ray_bundle, batch
     
     
     def next_eval(self, step: int) -> Tuple[RayBundle, Dict]:
         ray_bundle, batch =  super().next_eval(step)
-        ray_bundle.metadata['use_scale'] = False if self.feature_type == 'sam' else True
         return ray_bundle, batch
         

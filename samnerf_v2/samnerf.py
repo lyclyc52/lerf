@@ -28,14 +28,16 @@ from typing import Literal
 @dataclass
 class LERFModelConfig(NerfactoModelConfig):
     _target: Type = field(default_factory=lambda: LERFModel)
-    clip_loss_weight: float = 0.1
+    feature_loss_weight: float = 0.1
     n_scales: int = 30
     max_scale: float = 1.5
     
     feature_type: Literal['clip', 'xdecoder', 'sam'] = 'clip' 
+    
+    use_contrastive: bool = False
     contrastive_sample_n = 1 # size of constrastive sample points
-    contrastive_temperature = 1
-    contrastive_loss_weight: float = 0.08
+    contrastive_temperature = 20
+    contrastive_loss_weight: float = 0.1
     postive_threshold: float = 0.6 # threshold to distinguish positive and negative for contrastive learning
     
     """maximum scale used to compute relevancy with"""
@@ -51,8 +53,9 @@ class LERFModel(NerfactoModel):
     def populate_modules(self):
         super().populate_modules()
 
-        self.renderer_clip = CLIPRenderer()
+        self.renderer_feature = CLIPRenderer() if self.config.feature_type == 'sam' else MeanRenderer()
         self.renderer_mean = MeanRenderer()
+        self.renderer_contrastive = MeanRenderer()
 
         self.image_encoder: BaseImageEncoder = self.kwargs["image_encoder"]
         self.lerf_field = LERFField(
@@ -61,9 +64,11 @@ class LERFModel(NerfactoModel):
             self.config.hashgrid_resolutions,
             clip_n_dims=self.image_encoder.embedding_dim,
             feature_type=self.config.feature_type,
+            use_contrastive=self.config.use_contrastive
         )
         
         self.latest_featuremap = None
+        self.latest_constrastive_featuremap = None
         self.latest_rgb = None
         self.feautre_save_path = ViewerText(name="Feature save path",
                                          default_value="./debug/featuremap.npy")
@@ -96,14 +101,18 @@ class LERFModel(NerfactoModel):
 
         # self.single_scale_box = ViewerCheckbox("Single Scale", False, cb_hook=single_scale_cb)
     def save_featuremap(self, button):
-        np.save(self.clip_save_path.value, self.latest_featuremap)
-        rgb_path = self.clip_save_path.value.replace(".npy", ".png")
+        np.save(self.feautre_save_path.value, self.latest_featuremap)
+        
+        contrastive_path = self.feautre_save_path.value.replace(".npy", "_ctr.npy")
+        np.save(contrastive_path, self.latest_constrastive_featuremap)
+        
+        rgb_path = self.feautre_save_path.value.replace(".npy", ".png")
 
         rgb = self.latest_rgb * 255
         rgb = rgb.astype(np.uint8)
 
         imageio.imwrite(rgb_path, rgb)
-        print(f"Saved clip featuremap to {self.clip_save_path.value}")
+        print(f"Saved featuremap to {self.feautre_save_path.value}")
 
     def get_max_across(self, ray_samples, weights, hashgrid_field, scales_shape, preset_scales=None):
         # TODO smoothen this out
@@ -125,7 +134,7 @@ class LERFModel(NerfactoModel):
                     hashgrid_field,
                     torch.full(scales_shape, scale, device=weights.device, dtype=hashgrid_field.dtype),
                 )
-            clip_output = self.renderer_clip(embeds=clip_output, weights=weights.detach())
+            clip_output = self.renderer_feature(embeds=clip_output, weights=weights.detach())
 
             for j in range(n_phrases):
                 if preset_scales is None or j == i:
@@ -176,12 +185,16 @@ class LERFModel(NerfactoModel):
             lerf_field_outputs = self.lerf_field.get_outputs(lerf_samples)
 
         if self.training:
-            outputs["clip"] = self.renderer_clip(
+            outputs["feature"] = self.renderer_feature(
                 embeds=lerf_field_outputs[LERFFieldHeadNames.FEATURE], weights=lerf_weights.detach()
             )
             outputs["dino"] = self.renderer_mean(
                 embeds=lerf_field_outputs[LERFFieldHeadNames.DINO], weights=lerf_weights.detach()
             )
+            if self.config.use_contrastive:
+                outputs["contrastive"] = self.renderer_contrastive(
+                    embeds=lerf_field_outputs[LERFFieldHeadNames.CONTRASTIVE], weights=lerf_weights.detach()
+                )
 
         if not self.training:
             with torch.no_grad():
@@ -196,13 +209,17 @@ class LERFModel(NerfactoModel):
                     outputs["raw_relevancy"] = max_across  # N x B x 1
                     outputs["best_scales"] = best_scales.to(self.device)  # N
                     
-                    outputs["feature"] = self.renderer_clip(
+                    outputs["feature"] = self.renderer_feature(
                         embeds=lerf_field_outputs[LERFFieldHeadNames.FEATURE], weights=lerf_weights.detach()
                     )
                 elif self.config.feature_type == 'sam':
-                    outputs["feature"] = self.renderer_clip(
+                    outputs["feature"] = self.renderer_feature(
                         embeds=lerf_field_outputs[LERFFieldHeadNames.FEATURE], weights=lerf_weights.detach()
                     )
+                    if self.config.use_contrastive:
+                        outputs["contrastive"] = self.renderer_contrastive(
+                            embeds=lerf_field_outputs[LERFFieldHeadNames.CONTRASTIVE], weights=lerf_weights.detach()
+                        )
         return outputs
 
     @torch.no_grad()
@@ -247,6 +264,7 @@ class LERFModel(NerfactoModel):
             outputs = self.forward(ray_bundle=ray_bundle)
             # standard nerfstudio concatting
             for output_name, output in outputs.items():  # type: ignore
+
                 if output_name == "best_scales":
                     continue
                 if output_name == "raw_relevancy":
@@ -261,7 +279,6 @@ class LERFModel(NerfactoModel):
                 continue
             outputs[output_name] = torch.cat(outputs_list).view(image_height, image_width, -1)  # type: ignore
             
-        
         for i in range(len(self.image_encoder.positives)):
             if self.config.feature_type == 'clip':
                 p_i = torch.clip(outputs[f"relevancy_{i}"] - 0.5, 0, 1)
@@ -269,11 +286,15 @@ class LERFModel(NerfactoModel):
                 mask = (outputs["relevancy_0"] < 0.5).squeeze()
                 outputs[f"composited_{i}"][mask, :] = outputs["rgb"][mask, :]
             elif self.config.feature_type == 'sam':
-                masks, scores, logits = self.image_encoder.decode(output['feature'], outputs['rgb'], i)
-                print_shape(masks)
-            
+                # print_shape(outputs['rgb'])
+                position = np.array(self.image_encoder.positives)
+                masks, scores, logits = self.image_encoder.decode_feature(outputs['feature'], outputs['rgb'], position)
+                mask = outputs["rgb"]
+                mask[masks[0], :] = mask[masks[0], :] * 0.5 + torch.tensor([0.6,0.1,0.1])[None, None, ...].to(mask.device)
+                outputs[f"composited_{i}"] = torch.clip(mask, 0, 1)
         if image_width >= 512:
             self.latest_featuremap = outputs['feature'].detach().cpu().numpy()
+            self.latest_constrastive_featuremap = outputs['contrastive'].detach().cpu().numpy()
             self.latest_rgb = outputs['rgb'].detach().cpu().numpy()
             
         
@@ -299,14 +320,10 @@ class LERFModel(NerfactoModel):
     def get_loss_dict(self, outputs, batch, metrics_dict=None):
         loss_dict = super().get_loss_dict(outputs, batch, metrics_dict)
         if self.training:
-            unreduced_clip = self.config.clip_loss_weight * torch.nn.functional.huber_loss(
-                outputs["clip"], batch["clip"], delta=1.25, reduction="none"
-            )
-            loss_dict["clip_loss"] = unreduced_clip.sum(dim=-1).nanmean()
-            unreduced_dino = torch.nn.functional.mse_loss(outputs["dino"], batch["dino"], reduction="none")
-            loss_dict["dino_loss"] = unreduced_dino.sum(dim=-1).nanmean()
+
             
             if batch['use_contrastive_loss']:
+                loss_dict = {}
                 # img_ray_0 = torch.where(batch['indices'][:, 0] == batch['image_idx'][0].to(batch['indices'].device))
                 # img_ray_1 = torch.where(batch['indices'][:, 0] == batch['image_idx'][1].to(batch['indices'].device))
                 # img_ray_0 = outputs["clip"][img_ray_0]
@@ -319,13 +336,21 @@ class LERFModel(NerfactoModel):
                 # loss_dict['contrastive_loss'] =  self.config.contrastive_loss_weight * self.contrastive_loss(self_support_mask, img_ray_1, support_ray) 
                 
                 
-                support_ray_index = torch.randint(0,  outputs["clip"].size(0), (self.config.contrastive_sample_n,))
-                support_ray = outputs["clip"][support_ray_index].detach()
-                img_ray_1 = torch.cat([outputs["clip"][0:support_ray_index], outputs["clip"][support_ray_index+1:]])
-                self_support_mask = self.self_support(img_ray_1, support_ray)
-                loss_dict['contrastive_loss'] =  self.config.contrastive_loss_weight * self.contrastive_loss(self_support_mask, img_ray_1, support_ray.detach()) 
+                # support_ray_index = torch.randint(0,  outputs["feature"].size(0), (self.config.contrastive_sample_n,))
+                # support_ray = outputs["feature"][support_ray_index].detach()
+                # img_ray_1 = torch.cat([outputs["feature"][0:support_ray_index], outputs["feature"][support_ray_index+1:]])
+                # self_support_mask = self.self_support(img_ray_1, support_ray)
+                # loss_dict['contrastive_loss'] =  self.config.contrastive_loss_weight * self.contrastive_loss(self_support_mask, img_ray_1, support_ray.detach()) 
     
-        
+                # support_ray_index = torch.randint(0,  outputs["feature"].size(0), (self.config.contrastive_sample_n,))
+                support_ray = outputs["contrastive"][batch['sample_idx']]
+                loss_dict['contrastive_loss'] =  self.config.contrastive_loss_weight * self.contrastive_loss(batch['mask'], outputs['contrastive'], support_ray) 
+            unreduced_clip = self.config.feature_loss_weight * torch.nn.functional.huber_loss(
+                outputs["feature"], batch["feature"], delta=1.25, reduction="none"
+            )
+            loss_dict["feature_loss"] = unreduced_clip.sum(dim=-1).nanmean()
+            unreduced_dino = torch.nn.functional.mse_loss(outputs["dino"], batch["dino"], reduction="none")
+            loss_dict["dino_loss"] = unreduced_dino.sum(dim=-1).nanmean()
         return loss_dict
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
@@ -342,9 +367,13 @@ class LERFModel(NerfactoModel):
             support_feature: [1, K]
         """
         labels = (mask> self.config.postive_threshold).to(torch.float32)
+        # print(torch.exp(-torch.sum((features - support_feature)**2, -1)).shape)
+        # exit()
+        # similarity = features @ support_feature.T * torch.exp(torch.tensor(self.config.contrastive_temperature))
+        similarity = torch.exp(-torch.tensor(self.config.contrastive_temperature) * torch.sum((features - support_feature)**2, -1))
+
         
-        similarity = features @ support_feature.T * torch.exp(torch.tensor(self.config.contrastive_temperature))
-        contrastive_loss = torch.nn.functional.binary_cross_entropy_with_logits(similarity[..., 0], labels)
+        contrastive_loss = torch.nn.functional.binary_cross_entropy_with_logits(similarity, labels)
         
         return contrastive_loss
     

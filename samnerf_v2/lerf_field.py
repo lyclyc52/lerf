@@ -33,7 +33,8 @@ class LERFField(Field):
         grid_resolutions,
         clip_n_dims: int,
         spatial_distortion: SpatialDistortion = SceneContraction(),
-        feature_type: Literal['clip', 'xdecoder', 'sam'] = 'clip' 
+        feature_type: Literal['clip', 'xdecoder', 'sam'] = 'clip',
+        use_contrastive: bool = False
     ):
         super().__init__()
         assert len(grid_layers) == len(grid_sizes) and len(grid_resolutions) == len(grid_layers)
@@ -59,7 +60,20 @@ class LERFField(Field):
                 "n_hidden_layers": 4,
             },
         )
-
+        self.use_contrastive = use_contrastive
+        if self.use_contrastive:
+            self.contrastive_net = tcnn.Network(
+                n_input_dims=tot_out_dims if self.feature_type == 'sam' else tot_out_dims + 1,
+                n_output_dims=clip_n_dims,
+                network_config={
+                    "otype": "CutlassMLP",
+                    "activation": "ReLU",
+                    "output_activation": "None",
+                    "n_neurons": 256,
+                    "n_hidden_layers": 4,
+                },
+            )
+        
         self.dino_net = tcnn.Network(
             n_input_dims=tot_out_dims,
             n_output_dims=384,
@@ -108,7 +122,13 @@ class LERFField(Field):
             outputs[LERFFieldHeadNames.FEATURE] = sam_pass
         dino_pass = self.dino_net(x).view(*ray_samples.frustums.shape, -1)
         outputs[LERFFieldHeadNames.DINO] = dino_pass
-
+        if self.use_contrastive:
+            if self.feature_type == 'clip':
+                contrastive_pass = self.contrastive_net(torch.cat([x, clip_scales.view(-1, 1)], dim=-1)).view(*ray_samples.frustums.shape, -1)
+                outputs[LERFFieldHeadNames.CONTRASTIVE] = contrastive_pass / contrastive_pass.norm(dim=-1, keepdim=True)
+            elif self.feature_type == 'sam':
+                contrastive_pass = self.contrastive_net(x).view(*ray_samples.frustums.shape, -1)
+                outputs[LERFFieldHeadNames.CONTRASTIVE] = contrastive_pass
         return outputs
 
     def get_output_from_hashgrid(self, ray_samples: RaySamples, hashgrid_field, scale=None):
