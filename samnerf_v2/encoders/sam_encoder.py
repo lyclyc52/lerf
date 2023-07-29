@@ -34,7 +34,7 @@ class SAMNetwork(BaseImageEncoder):
         sam.to(device="cuda")
         self.model = SamPredictor(sam)
         
-        self.positive_input = ViewerText("LERF Positives", "", cb_hook=self.gui_cb)
+        self.positive_input = ViewerText("SAM Positives", "", cb_hook=self.gui_cb)
 
         self.positives = self.set_positives(self.positive_input.value)
 
@@ -48,7 +48,8 @@ class SAMNetwork(BaseImageEncoder):
         return self.config.sam_n_dims
     
     def gui_cb(self,element):
-        self.set_positives(element.value.split(";"))
+        self.positives = self.set_positives(element.value.split(";"))
+        print(self.positives)
 
     def set_positives(self, text_list):
         positives = []
@@ -77,15 +78,15 @@ class SAMNetwork(BaseImageEncoder):
         self.model.set_image(input)
         return self.model.features
     
-    def decode_feature(self, feature, image, index):
+    def decode_feature(self, feature, image, position):
+
+        image = (image.cpu().numpy() * 255).astype(np.uint8)
+        self.model.set_image_info(image)
         
-        if not self.model.is_image_set:
-            self.model.set_image(image)
-        feature = feature.permute(2,0,1)
+        feature = feature.permute(2,0,1).cpu().numpy()
         self.model.set_torch_feature(feature)
-        positive = np.array([self.positives[index]])
         masks, scores, logits = self.model.predict(
-            point_coords=positive,
+            point_coords=position,
             point_labels=np.array([1]),
             multimask_output=True,
         )

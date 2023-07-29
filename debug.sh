@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 
 ns-train samnerf-v2 \
 --data /ssddata/yliugu/lerf/data/Datasets/teatime \
 --save_only_latest_checkpoint False \
---pipeline.datamanager.disable-contrastive True \
---project-name origin_global_sample \
---pipeline.feature-type sam 
+--pipeline.use-contrastive True \
+--project-name contrastive \
+--pipeline.feature-type sam \
+--pipeline.datamanager.contrastive_starting_epoch 5000 \
+--use-wandb True

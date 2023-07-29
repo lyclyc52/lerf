@@ -6,3 +6,4 @@ class LERFFieldHeadNames(Enum):
     HASHGRID = "hashgrid"
     FEATURE = 'feature'
     DINO = "dino"
+    CONTRASTIVE = 'contrastive'

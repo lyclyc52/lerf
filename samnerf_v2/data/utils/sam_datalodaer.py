@@ -38,8 +38,8 @@ class SAMDataloader(FeatureDataloader):
         self.feature_list = []
         super().__init__(cfg, device, image_list, cache_path)
 
-    def __call__(self, img_points, scale=None):
-        return self._random_scales(img_points)
+    def __call__(self, img_points, get_mask=False):
+        return self._random_scales(img_points, get_mask)
 
 
     def _stride_scaler(self, tile_ratio, stride_scaler):
@@ -81,11 +81,12 @@ class SAMDataloader(FeatureDataloader):
         np.save(self.cache_path, self.feature_list.cpu())
         
 
-    def _random_scales(self, img_points):
+    def _random_scales(self, img_points, get_mask=False):
         # img_points: (B, 3) 
         img_points = img_points.to(self.device)
         img_ind = img_points[:, 0]
         feature_coord = img_points[:, 1:] / self.feature_scale
+
         
         x_ind = torch.floor(feature_coord[:, 0]).long()
         y_ind = torch.floor(feature_coord[:, 1]).long()
@@ -103,22 +104,22 @@ class SAMDataloader(FeatureDataloader):
         bot = torch.lerp(botleft, botright, right_w[:, None])
 
         bot_w = (feature_coord[:, 1] - y_ind).to(self.device)  
-        return torch.lerp(top, bot, bot_w[:, None])
+        feature = torch.lerp(top, bot, bot_w[:, None])
+        
+        mask = None
+        if get_mask:
+            mask = self.mask[img_points[:, 1], img_points[:, 2]]
+            
+        return feature, mask
 
+    def generate_mask(self, image_batch, position):
+        feature = self.feature_list[position[0][0]]
+        position = position[0][1:].numpy()
+        position = np.array([[position[1], position[0]]])
 
+        masks, scores, logits = self.model.decode_feature(feature.permute(1,2,0), 
+                                                        image_batch['image'][0], 
+                                                        position)
 
-    def _uniform_scales(self, img_points, scale):
-        scale_bin = torch.floor(
-            (scale - self.tile_sizes[0]) / (self.tile_sizes[-1] - self.tile_sizes[0]) * (self.tile_sizes.shape[0] - 1)
-        ).to(torch.int64)
-        scale_weight = (scale - self.tile_sizes[scale_bin]) / (
-            self.tile_sizes[scale_bin + 1] - self.tile_sizes[scale_bin]
-        )
-        interp_lst = torch.stack([interp(img_points) for interp in self.data_dict.values()])
-        point_inds = torch.arange(img_points.shape[0])
-        interp = torch.lerp(
-            interp_lst[scale_bin, point_inds],
-            interp_lst[scale_bin + 1, point_inds],
-            torch.Tensor([scale_weight]).half().to(self.device)[..., None],
-        )
-        return interp / interp.norm(dim=-1, keepdim=True), scale
+        
+        self.mask = torch.from_numpy(masks[np.argmax(scores)]).to(self.device)
