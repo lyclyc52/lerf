@@ -31,6 +31,15 @@ class SAMDataloader(FeatureDataloader):
         self.feature_size = 64
         self.feature_scale = np.max(np.array(cfg["image_shape"])) / self.feature_size
 
+        # If supersampling, generate image-sized feature maps
+        self.supersampling = cfg.get("supersampling", False)
+        self.original_feature_size = 64     # original SAM feature size
+
+        if self.supersampling:
+            img_max_dim = np.max(np.array(cfg["image_shape"]))
+            target_feature_size = 64 * cfg["supersampling_factor"]
+            self.feature_size = min(img_max_dim, target_feature_size)
+            self.feature_scale = img_max_dim / self.feature_size
 
         self.model = model
         self.embed_size = self.model.embedding_dim
@@ -64,14 +73,39 @@ class SAMDataloader(FeatureDataloader):
         self.feature_list = torch.from_numpy(np.load(self.cache_path.with_suffix(".npy"))).to(self.device)
 
 
-    def create(self, image_list):
-        for img in image_list:
-            img = (img.permute(1,2,0).cpu().numpy() * 255).astype(np.uint8)
-            feature = self.model.encode_image(img)
-            self.feature_list.append(feature)
-            
+    def get_supersampled_feature(self, img):
+        num_samples = int(np.ceil(self.feature_size / self.original_feature_size))
+        full_feature = None
 
-        self.feature_list = torch.cat(self.feature_list).to(self.device)
+        for i in range(num_samples):
+            for j in range(num_samples):
+                x = num_samples // 2 - i - 1
+                y = num_samples // 2 - j - 1
+                T = np.array([[1, 0, x], [0, 1, y]]).astype(np.float32)
+
+                img_shifted = cv2.warpAffine(img, T, (img.shape[1], img.shape[0]))
+                feature = self.model.encode_image(img_shifted)
+                if full_feature is None:
+                    full_feature = torch.zeros((*feature.shape[:2], self.feature_size, self.feature_size), 
+                                               device=self.device, dtype=feature.dtype)
+
+                x_inds = np.arange(i, self.feature_size, num_samples)
+                y_inds = np.arange(j, self.feature_size, num_samples)
+
+                full_feature[:, :, y_inds[:, None], x_inds] = feature[:, :, :len(y_inds), :len(x_inds)]
+
+        return full_feature
+
+    def create(self, image_list):
+        for img in tqdm(image_list):
+            img = (img.permute(1,2,0).cpu().numpy() * 255).astype(np.uint8)
+            if self.supersampling:
+                feature = self.get_supersampled_feature(img)
+            else:
+                feature = self.model.encode_image(img)
+            self.feature_list.append(feature.to('cpu' if self.supersampling else self.device))
+            
+        self.feature_list = torch.cat(self.feature_list).to('cpu' if self.supersampling else self.device)
 
     def save(self):
         cache_info_path = self.cache_path.with_suffix(".info")
@@ -85,26 +119,33 @@ class SAMDataloader(FeatureDataloader):
         # img_points: (B, 3) 
         img_points = img_points.to(self.device)
         img_ind = img_points[:, 0]
-        feature_coord = img_points[:, 1:] / self.feature_scale
 
-        
-        x_ind = torch.floor(feature_coord[:, 0]).long()
-        y_ind = torch.floor(feature_coord[:, 1]).long()
-        x_left, x_right = x_ind, torch.where(x_ind + 1 < self.feature_size - 1, x_ind + 1, self.feature_size - 1)
-        y_top, y_bot = y_ind, torch.where(y_ind + 1 < self.feature_size - 1, y_ind + 1, self.feature_size - 1)
+        if self.supersampling:
+            feature_coord = img_points[:, 1:] / self.feature_scale
+            x_ind = torch.floor(feature_coord[:, 0]).long().to(self.feature_list.device)
+            y_ind = torch.floor(feature_coord[:, 1]).long().to(self.feature_list.device)
+            img_ind = img_ind.to(self.feature_list.device)
+            feature = self.feature_list[img_ind, :, x_ind, y_ind].to(self.device)
+        else:
+            feature_coord = img_points[:, 1:] / self.feature_scale
+            
+            x_ind = torch.floor(feature_coord[:, 0]).long()
+            y_ind = torch.floor(feature_coord[:, 1]).long()
+            x_left, x_right = x_ind, torch.where(x_ind + 1 < self.feature_size - 1, x_ind + 1, self.feature_size - 1)
+            y_top, y_bot = y_ind, torch.where(y_ind + 1 < self.feature_size - 1, y_ind + 1, self.feature_size - 1)
 
-        topleft = self.feature_list[img_ind, :, x_left, y_top].to(self.device)
-        topright = self.feature_list[img_ind, :, x_right, y_top].to(self.device)
-        botleft = self.feature_list[img_ind, :,  x_left, y_bot].to(self.device)
-        botright = self.feature_list[img_ind, :, x_right, y_bot].to(self.device)
-        
-        
-        right_w = (feature_coord[:, 0] - x_ind).to(self.device)  
-        top = torch.lerp(topleft, topright, right_w[:, None])
-        bot = torch.lerp(botleft, botright, right_w[:, None])
+            topleft = self.feature_list[img_ind, :, x_left, y_top].to(self.device)
+            topright = self.feature_list[img_ind, :, x_right, y_top].to(self.device)
+            botleft = self.feature_list[img_ind, :,  x_left, y_bot].to(self.device)
+            botright = self.feature_list[img_ind, :, x_right, y_bot].to(self.device)
+            
+            
+            right_w = (feature_coord[:, 0] - x_ind).to(self.device)  
+            top = torch.lerp(topleft, topright, right_w[:, None])
+            bot = torch.lerp(botleft, botright, right_w[:, None])
 
-        bot_w = (feature_coord[:, 1] - y_ind).to(self.device)  
-        feature = torch.lerp(top, bot, bot_w[:, None])
+            bot_w = (feature_coord[:, 1] - y_ind).to(self.device)  
+            feature = torch.lerp(top, bot, bot_w[:, None])
         
         mask = None
         if get_mask:
