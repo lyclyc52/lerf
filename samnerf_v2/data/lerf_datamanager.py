@@ -48,9 +48,11 @@ class LERFDataManagerConfig(VanillaDataManagerConfig):
     patch_tile_size_range: Tuple[int, int] = (0.05, 0.5)
     patch_tile_size_res: int = 7
     patch_stride_scaler: float = 0.5
-    feature_type: Literal['clip', 'xdecoder', 'sam'] = 'clip' 
+    feature_type: Literal['clip', 'xdecoder', 'sam'] = 'sam' 
     contrastive_starting_epoch: int = 5000
     use_contrastive: bool = False
+    supersampling: bool = False
+    supersampling_factor: int = 4
 
 
 class LERFDataManager(VanillaDataManager):  # pylint: disable=abstract-method
@@ -135,10 +137,13 @@ class LERFDataManager(VanillaDataManager):  # pylint: disable=abstract-method
                     "stride_scaler": 0.5,
                     "image_shape": list(images.shape[2:4]),
                     "model_name": self.image_encoder.name,
+                    "supersampling": self.config.supersampling,
+                    "supersampling_factor": self.config.supersampling_factor,
                 },
                 cache_path=clip_cache_path,
                 model=self.image_encoder,
             )
+
     def next_train(self, step: int) -> Tuple[RayBundle, Dict]:
         """Returns the next batch of data from the train dataloader."""
 

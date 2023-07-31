@@ -39,9 +39,11 @@ class LERFPipelineConfig(VanillaPipelineConfig):
     """specifies the datamanager config"""
     model: LERFModelConfig = LERFModelConfig()
     """specifies the model config"""
-    feature_type: Literal['clip', 'xdecoder', 'sam'] = 'clip'
+    feature_type: Literal['clip', 'xdecoder', 'sam'] = 'sam'
     """specifies the vision-language network config""" 
     use_contrastive: bool = False
+    
+    sam_checkpoint: str = './sam_checkpoint.pth'
 
 
 class LERFPipeline(VanillaPipeline):
@@ -74,7 +76,9 @@ class LERFPipeline(VanillaPipeline):
             #     clip_model_type="ViT-B/16", clip_n_dims=512
             # )
         elif self.config.feature_type == 'sam':
-            network_config=SAMNetworkConfig()
+            network_config=SAMNetworkConfig(
+                sam_checkpoint=self.config.sam_checkpoint
+            )
         else:
             raise ValueError("Invalid Feature Type.")
 

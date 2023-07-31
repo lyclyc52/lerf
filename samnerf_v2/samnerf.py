@@ -25,6 +25,9 @@ from samnerf_v2.lerf_renderers import CLIPRenderer, MeanRenderer
 from samnerf_v2.helper import print_shape
 import imageio
 from typing import Literal
+import os
+
+
 @dataclass
 class LERFModelConfig(NerfactoModelConfig):
     _target: Type = field(default_factory=lambda: LERFModel)
@@ -32,7 +35,7 @@ class LERFModelConfig(NerfactoModelConfig):
     n_scales: int = 30
     max_scale: float = 1.5
     
-    feature_type: Literal['clip', 'xdecoder', 'sam'] = 'clip' 
+    feature_type: Literal['clip', 'xdecoder', 'sam'] = 'sam' 
     
     use_contrastive: bool = False
     contrastive_sample_n = 1 # size of constrastive sample points
@@ -100,18 +103,27 @@ class LERFModel(NerfactoModel):
         #     self.hardcoded_scale_slider.set_disabled(not element.value)
 
         # self.single_scale_box = ViewerCheckbox("Single Scale", False, cb_hook=single_scale_cb)
+        
     def save_featuremap(self, button):
-        np.save(self.feautre_save_path.value, self.latest_featuremap)
-        
-        contrastive_path = self.feautre_save_path.value.replace(".npy", "_ctr.npy")
-        np.save(contrastive_path, self.latest_constrastive_featuremap)
-        
-        rgb_path = self.feautre_save_path.value.replace(".npy", ".png")
+        save_dir = os.path.dirname(self.feautre_save_path.value)
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
 
-        rgb = self.latest_rgb * 255
-        rgb = rgb.astype(np.uint8)
+        if self.latest_featuremap is not None:
+            np.save(self.feautre_save_path.value, self.latest_featuremap)
+        
+        if self.latest_constrastive_featuremap is not None:
+            contrastive_path = self.feautre_save_path.value.replace(".npy", "_ctr.npy")
+            np.save(contrastive_path, self.latest_constrastive_featuremap)
+        
+        if self.latest_rgb is not None:
+            rgb_path = self.feautre_save_path.value.replace(".npy", ".png")
 
-        imageio.imwrite(rgb_path, rgb)
+            rgb = self.latest_rgb * 255
+            rgb = rgb.astype(np.uint8)
+
+            imageio.imwrite(rgb_path, rgb)
+            
         print(f"Saved featuremap to {self.feautre_save_path.value}")
 
     def get_max_across(self, ray_samples, weights, hashgrid_field, scales_shape, preset_scales=None):
@@ -292,11 +304,12 @@ class LERFModel(NerfactoModel):
                 mask = outputs["rgb"]
                 mask[masks[0], :] = mask[masks[0], :] * 0.5 + torch.tensor([0.6,0.1,0.1])[None, None, ...].to(mask.device)
                 outputs[f"composited_{i}"] = torch.clip(mask, 0, 1)
+                
         if image_width >= 512:
             self.latest_featuremap = outputs['feature'].detach().cpu().numpy()
-            self.latest_constrastive_featuremap = outputs['contrastive'].detach().cpu().numpy()
+            if 'contrastive' in outputs:
+                self.latest_constrastive_featuremap = outputs['contrastive'].detach().cpu().numpy()
             self.latest_rgb = outputs['rgb'].detach().cpu().numpy()
-            
         
         return outputs
 
@@ -392,6 +405,7 @@ class LERFModel(NerfactoModel):
             :, 0, :
         ]
         return score[..., 0]
+    
     def self_support(self, feature_q, support):
         """
         Args:

@@ -21,7 +21,7 @@ class SAMNetworkConfig(BaseImageEncoderConfig):
     _target: Type = field(default_factory=lambda: SAMNetwork)
     model_type: str = "default"
     sam_n_dims: int = 256
-    sam_checkpoint: str = "/ssddata/yliugu/lerf/dependencies/Grounded-Segment-Anything/checkpoint/sam_vit_h_4b8939.pth"
+    sam_checkpoint: str = "./sam_vit_h_4b8939.pth"
 
 
 
