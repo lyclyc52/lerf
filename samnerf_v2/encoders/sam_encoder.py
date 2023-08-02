@@ -49,7 +49,7 @@ class SAMNetwork(BaseImageEncoder):
         return self.config.sam_n_dims
     
     def gui_cb(self,element):
-        self.positives = self.set_positives(element.value.split(";")
+        self.positives = self.set_positives(element.value.split(";"))
 
     def set_positives(self, text_list):
         positives = []

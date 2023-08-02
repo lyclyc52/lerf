@@ -334,7 +334,6 @@ class LERFModel(NerfactoModel):
         loss_dict = super().get_loss_dict(outputs, batch, metrics_dict)
         if self.training:
 
-            
             if batch['use_contrastive_loss']:
                 loss_dict = {}
                 # img_ray_0 = torch.where(batch['indices'][:, 0] == batch['image_idx'][0].to(batch['indices'].device))
@@ -358,12 +357,14 @@ class LERFModel(NerfactoModel):
                 # support_ray_index = torch.randint(0,  outputs["feature"].size(0), (self.config.contrastive_sample_n,))
                 support_ray = outputs["contrastive"][batch['sample_idx']]
                 loss_dict['contrastive_loss'] =  self.config.contrastive_loss_weight * self.contrastive_loss(batch['mask'], outputs['contrastive'], support_ray) 
+
             unreduced_clip = self.config.feature_loss_weight * torch.nn.functional.huber_loss(
                 outputs["feature"], batch["feature"], delta=1.25, reduction="none"
             )
             loss_dict["feature_loss"] = unreduced_clip.sum(dim=-1).nanmean()
             unreduced_dino = torch.nn.functional.mse_loss(outputs["dino"], batch["dino"], reduction="none")
             loss_dict["dino_loss"] = unreduced_dino.sum(dim=-1).nanmean()
+            
         return loss_dict
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:

@@ -70,7 +70,8 @@ class SAMDataloader(FeatureDataloader):
                 os.remove(os.path.join(self.cache_path, f))
             raise ValueError("Config mismatch")
         
-        self.feature_list = torch.from_numpy(np.load(self.cache_path.with_suffix(".npy"))).to(self.device)
+        device = 'cpu' if self.supersampling else self.device
+        self.feature_list = torch.from_numpy(np.load(self.cache_path.with_suffix(".npy"))).to(device)
 
 
     def get_supersampled_feature(self, img):
@@ -119,39 +120,35 @@ class SAMDataloader(FeatureDataloader):
         
 
     def _random_scales(self, img_points, get_mask=False):
+        feautre_device = self.feature_list.device
+
         # img_points: (B, 3) 
-        img_points = img_points.to(self.device)
+        img_points = img_points.to(feautre_device)
         img_ind = img_points[:, 0]
+        
+        feature_coord = img_points[:, 1:] / self.feature_scale
+        
+        x_ind = torch.floor(feature_coord[:, 0]).long()
+        y_ind = torch.floor(feature_coord[:, 1]).long()
+        x_left, x_right = x_ind, torch.where(x_ind + 1 < self.feature_size - 1, x_ind + 1, self.feature_size - 1)
+        y_top, y_bot = y_ind, torch.where(y_ind + 1 < self.feature_size - 1, y_ind + 1, self.feature_size - 1)
 
-        if self.supersampling:
-            feature_coord = img_points[:, 1:] / self.feature_scale
-            x_ind = torch.floor(feature_coord[:, 0]).long().to(self.feature_list.device)
-            y_ind = torch.floor(feature_coord[:, 1]).long().to(self.feature_list.device)
-            img_ind = img_ind.to(self.feature_list.device)
-            feature = self.feature_list[img_ind, :, x_ind, y_ind].to(self.device)
-        else:
-            feature_coord = img_points[:, 1:] / self.feature_scale
-            
-            x_ind = torch.floor(feature_coord[:, 0]).long()
-            y_ind = torch.floor(feature_coord[:, 1]).long()
-            x_left, x_right = x_ind, torch.where(x_ind + 1 < self.feature_size - 1, x_ind + 1, self.feature_size - 1)
-            y_top, y_bot = y_ind, torch.where(y_ind + 1 < self.feature_size - 1, y_ind + 1, self.feature_size - 1)
+        topleft = self.feature_list[img_ind, :, x_left, y_top]
+        topright = self.feature_list[img_ind, :, x_right, y_top]
+        botleft = self.feature_list[img_ind, :,  x_left, y_bot]
+        botright = self.feature_list[img_ind, :, x_right, y_bot]
+        
+        
+        right_w = (feature_coord[:, 0] - x_ind)
+        top = torch.lerp(topleft, topright, right_w[:, None])
+        bot = torch.lerp(botleft, botright, right_w[:, None])
 
-            topleft = self.feature_list[img_ind, :, x_left, y_top].to(self.device)
-            topright = self.feature_list[img_ind, :, x_right, y_top].to(self.device)
-            botleft = self.feature_list[img_ind, :,  x_left, y_bot].to(self.device)
-            botright = self.feature_list[img_ind, :, x_right, y_bot].to(self.device)
-            
-            
-            right_w = (feature_coord[:, 0] - x_ind).to(self.device)  
-            top = torch.lerp(topleft, topright, right_w[:, None])
-            bot = torch.lerp(botleft, botright, right_w[:, None])
-
-            bot_w = (feature_coord[:, 1] - y_ind).to(self.device)  
-            feature = torch.lerp(top, bot, bot_w[:, None])
+        bot_w = (feature_coord[:, 1] - y_ind)
+        feature = torch.lerp(top, bot, bot_w[:, None]).to(self.device)
         
         mask = None
         if get_mask:
+            img_points = img_points.to(self.mask.device)
             mask = self.mask[img_points[:, 1], img_points[:, 2]]
             
         return feature, mask
