@@ -43,7 +43,8 @@ class LERFPipelineConfig(VanillaPipelineConfig):
     """specifies the vision-language network config""" 
     use_contrastive: bool = False
     
-    sam_checkpoint: str = './sam_checkpoint.pth'
+    # sam_checkpoint: str = './sam_checkpoint.pth'
+    sam_checkpoint: str = '/ssddata/yliugu/lerf/dependencies/Grounded-Segment-Anything/checkpoint/sam_vit_h_4b8939.pth'
 
 
 class LERFPipeline(VanillaPipeline):
@@ -59,7 +60,6 @@ class LERFPipeline(VanillaPipeline):
         super(VanillaPipeline, self).__init__()
         self.config = config
         self.test_mode = test_mode
-
 
         self.config.datamanager.feature_type = self.config.feature_type
         self.config.model.feature_type = self.config.feature_type

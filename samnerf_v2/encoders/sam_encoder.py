@@ -22,6 +22,7 @@ class SAMNetworkConfig(BaseImageEncoderConfig):
     model_type: str = "default"
     sam_n_dims: int = 256
     sam_checkpoint: str = "./sam_vit_h_4b8939.pth"
+    # sam_checkpoint: str = '/ssddata/yliugu/lerf/dependencies/Grounded-Segment-Anything/checkpoint/sam_vit_h_4b8939.pth'
 
 
 
@@ -48,8 +49,7 @@ class SAMNetwork(BaseImageEncoder):
         return self.config.sam_n_dims
     
     def gui_cb(self,element):
-        self.positives = self.set_positives(element.value.split(";"))
-        print(self.positives)
+        self.positives = self.set_positives(element.value.split(";")
 
     def set_positives(self, text_list):
         positives = []
@@ -79,7 +79,6 @@ class SAMNetwork(BaseImageEncoder):
         return self.model.features
     
     def decode_feature(self, feature, image, position):
-
         image = (image.cpu().numpy() * 255).astype(np.uint8)
         self.model.set_image_info(image)
         

@@ -81,19 +81,22 @@ class SAMDataloader(FeatureDataloader):
             for j in range(num_samples):
                 x = num_samples // 2 - i - 1
                 y = num_samples // 2 - j - 1
+                
+                # print(num_samples)
+                # x = num_samples // 2 - 200 - 1
+                # y = num_samples // 2 - 200 - 1
+                
                 T = np.array([[1, 0, x], [0, 1, y]]).astype(np.float32)
 
                 img_shifted = cv2.warpAffine(img, T, (img.shape[1], img.shape[0]))
+                cv2.imwrite(f'save_{i}_{j}.png', img_shifted)
                 feature = self.model.encode_image(img_shifted)
                 if full_feature is None:
                     full_feature = torch.zeros((*feature.shape[:2], self.feature_size, self.feature_size), 
                                                device=self.device, dtype=feature.dtype)
-
                 x_inds = np.arange(i, self.feature_size, num_samples)
                 y_inds = np.arange(j, self.feature_size, num_samples)
-
                 full_feature[:, :, y_inds[:, None], x_inds] = feature[:, :, :len(y_inds), :len(x_inds)]
-
         return full_feature
 
     def create(self, image_list):

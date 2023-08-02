@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=3
 
 ns-train samnerf-v2 \
 --data /ssddata/yliugu/lerf/data/Datasets/teatime \
@@ -9,4 +9,5 @@ ns-train samnerf-v2 \
 --project-name contrastive \
 --pipeline.feature-type sam \
 --pipeline.datamanager.contrastive_starting_epoch 5000 \
---use-wandb True
+--pipeline.datamanager.supersampling True \
+--use-wandb False
