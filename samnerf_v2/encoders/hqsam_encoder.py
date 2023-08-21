@@ -5,6 +5,9 @@ import torch
 import torchvision
 import numpy as np
 
+# import sys
+# sys.path.append('/ssddata/yliugu/lerf/dependencies/sam-hq/') 
+
 
 try:
     from segment_anything import sam_model_registry, SamPredictor
@@ -17,17 +20,18 @@ from nerfstudio.viewer.server.viewer_elements import ViewerText
 
 
 @dataclass
-class SAMNetworkConfig(BaseImageEncoderConfig):
-    _target: Type = field(default_factory=lambda: SAMNetwork)
+class HQSAMNetworkConfig(BaseImageEncoderConfig):
+    _target: Type = field(default_factory=lambda: HQSAMNetwork)
     model_type: str = "vit_l"
     sam_n_dims: int = 256
+    hqsam_n_dims: int = 1024
     sam_checkpoint: str = "/ssddata/yliugu/lerf/dependencies/sam-hq/pretrained_checkpoint/sam_hq_vit_l.pth"
     # sam_checkpoint: str = '/ssddata/yliugu/lerf/dependencies/Grounded-Segment-Anything/checkpoint/sam_vit_h_4b8939.pth'
 
 
 
-class SAMNetwork(BaseImageEncoder):
-    def __init__(self, config: SAMNetworkConfig):
+class HQSAMNetwork(BaseImageEncoder):
+    def __init__(self, config: HQSAMNetworkConfig):
         super().__init__()
         self.config = config
 
@@ -76,7 +80,7 @@ class SAMNetwork(BaseImageEncoder):
 
     def encode_image(self, input):
         self.model.set_image(input)
-        return self.model.features
+        return [self.model.features, self.model.interm_features]
     
     def decode_feature(self, feature, image, position):
         image = (image.cpu().numpy() * 255).astype(np.uint8)
@@ -89,5 +93,6 @@ class SAMNetwork(BaseImageEncoder):
             point_labels=np.array([1]),
             multimask_output=True,
         )
+        
         return masks, scores, logits
             

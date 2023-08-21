@@ -8,9 +8,8 @@ ns-train samnerf-v2 \
 --pipeline.use-contrastive False \
 --project-name contrastive \
 --pipeline.feature-type sam \
---pipeline.datamanager.contrastive_starting_epoch 10000 \
 --pipeline.datamanager.feature_starting_epoch 1000000 \
 --pipeline.datamanager.supersampling False \
---base-dir hqsam_1 \
---pipeline.feature-type hqsam \
+--base-dir sam \
+--pipeline.feature-type sam \
 --use-wandb False

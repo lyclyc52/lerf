@@ -16,6 +16,16 @@ class SAMNERFTrainerConfig(TrainerConfig):
     """Configuration for training regimen"""
     _target: Type = field(default_factory=lambda: SAMNERFTrainer)
     use_wandb:bool = True
+    base_dir:str = None
+    
+    def get_base_dir(self) -> Path:
+        if self.base_dir is None:
+            return super().get_base_dir()
+        else:
+            assert self.method_name is not None, "Please set method name in config or via the cli"
+            self.set_experiment_name()
+            return Path(f"{self.output_dir}/{self.experiment_name}/{self.method_name}/{self.base_dir}")
+            
     
     
 class SAMNERFTrainer(Trainer):
@@ -33,7 +43,15 @@ class SAMNERFTrainer(Trainer):
             
     @profiler.time_function
     def train_iteration(self, step: int) -> TRAIN_INTERATION_OUTPUT:
+        
+        if step == self.pipeline.datamanager.config.feature_starting_epoch:
+            save_root = os.path.join(self.config.get_base_dir(), 'render_results')
+            self.pipeline.load_feature(save_root)
         loss, loss_dict, metrics_dict = super().train_iteration(step)
         if self.config.use_wandb:
             wandb.log(loss_dict)
         return loss, loss_dict, metrics_dict
+    
+    
+    
+

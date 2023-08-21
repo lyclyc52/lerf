@@ -11,9 +11,9 @@ from nerfstudio.engine.schedulers import ExponentialDecaySchedulerConfig
 from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.plugins.types import MethodSpecification
 
-from samnerf_v2.data.lerf_datamanager import LERFDataManagerConfig
+from samnerf_v2.data.sam_datamanager import SAMDataManagerConfig
 from samnerf_v2.samnerf import LERFModelConfig
-from samnerf_v2.lerf_pipeline import LERFPipelineConfig
+from samnerf_v2.sam_pipeline import LERFPipelineConfig
 from samnerf_v2.samnerf_trainer import SAMNERFTrainerConfig, SAMNERFTrainer
 """
 Swap out the network config to use OpenCLIP or CLIP here.
@@ -23,14 +23,13 @@ Swap out the network config to use OpenCLIP or CLIP here.
 samnerf_method = MethodSpecification(
     config=SAMNERFTrainerConfig(
         method_name="samnerf-v2",
-        steps_per_eval_batch=500,
         steps_per_save=500,
         max_num_iterations=30000,
         mixed_precision=True,
         pipeline=LERFPipelineConfig(
-            datamanager=LERFDataManagerConfig(
+            datamanager=SAMDataManagerConfig(
                 dataparser=NerfstudioDataParserConfig(train_split_fraction=0.99),
-                train_num_rays_per_batch=8192,
+                train_num_rays_per_batch=4096,
                 eval_num_rays_per_batch=4096,
                 camera_optimizer=CameraOptimizerConfig(
                     mode="SO3xR3", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
@@ -65,6 +64,7 @@ samnerf_method = MethodSpecification(
     ),
     description="Base config for LERF",
 )
+
 # lerf_method_big = MethodSpecification(
 #     config=TrainerConfig(
 #         method_name="lerf-big",

@@ -35,7 +35,7 @@ class LERFModelConfig(NerfactoModelConfig):
     n_scales: int = 30
     max_scale: float = 1.5
     
-    feature_type: Literal['clip', 'xdecoder', 'sam'] = 'sam' 
+    feature_type: Literal['clip', 'xdecoder', 'sam', 'hqsam'] = 'sam' 
     
     use_contrastive: bool = False
     contrastive_sample_n = 1 # size of constrastive sample points
@@ -56,7 +56,7 @@ class LERFModel(NerfactoModel):
     def populate_modules(self):
         super().populate_modules()
 
-        self.renderer_feature = CLIPRenderer() if self.config.feature_type == 'sam' else MeanRenderer()
+        self.renderer_feature = CLIPRenderer() if self.config.feature_type == 'clip' else MeanRenderer()
         self.renderer_mean = MeanRenderer()
         self.renderer_contrastive = MeanRenderer()
 
@@ -72,6 +72,7 @@ class LERFModel(NerfactoModel):
         
         self.latest_featuremap = None
         self.latest_constrastive_featuremap = None
+        self.latest_hq_featuremap = None
         self.latest_rgb = None
         self.feautre_save_path = ViewerText(name="Feature save path",
                                          default_value="./debug/featuremap.npy")
@@ -111,6 +112,10 @@ class LERFModel(NerfactoModel):
 
         if self.latest_featuremap is not None:
             np.save(self.feautre_save_path.value, self.latest_featuremap)
+            
+        if self.latest_hq_featuremap is not None:
+            for i in range(len(self.latest_hq_featuremap)):
+                np.save(self.feautre_save_path.value.replace('.npy', f"_hq{i}.npy"), self.latest_hq_featuremap[i])
         
         if self.latest_constrastive_featuremap is not None:
             contrastive_path = self.feautre_save_path.value.replace(".npy", "_ctr.npy")
@@ -193,8 +198,9 @@ class LERFModel(NerfactoModel):
         
         if self.config.feature_type == 'clip':
             lerf_field_outputs = self.lerf_field.get_outputs(lerf_samples, clip_scales)
-        elif self.config.feature_type == 'sam':
+        elif self.config.feature_type == 'sam' or self.config.feature_type == 'hqsam':
             lerf_field_outputs = self.lerf_field.get_outputs(lerf_samples)
+    
 
         if self.training:
             outputs["feature"] = self.renderer_feature(
@@ -207,6 +213,13 @@ class LERFModel(NerfactoModel):
                 outputs["contrastive"] = self.renderer_contrastive(
                     embeds=lerf_field_outputs[LERFFieldHeadNames.CONTRASTIVE], weights=lerf_weights.detach()
                 )
+            if self.config.feature_type == 'hqsam':
+                outputs['hqsam_feature'] = []
+                for f in lerf_field_outputs[LERFFieldHeadNames.ADVANCED_FEATURE]:
+                    outputs['hqsam_feature'].append(self.renderer_feature(
+                        embeds=f, weights=lerf_weights.detach()
+                    ))
+                
 
         if not self.training:
             with torch.no_grad():
@@ -224,7 +237,7 @@ class LERFModel(NerfactoModel):
                     outputs["feature"] = self.renderer_feature(
                         embeds=lerf_field_outputs[LERFFieldHeadNames.FEATURE], weights=lerf_weights.detach()
                     )
-                elif self.config.feature_type == 'sam':
+                elif self.config.feature_type == 'sam' or self.config.feature_type == 'hqsam':
                     outputs["feature"] = self.renderer_feature(
                         embeds=lerf_field_outputs[LERFFieldHeadNames.FEATURE], weights=lerf_weights.detach()
                     )
@@ -232,6 +245,13 @@ class LERFModel(NerfactoModel):
                         outputs["contrastive"] = self.renderer_contrastive(
                             embeds=lerf_field_outputs[LERFFieldHeadNames.CONTRASTIVE], weights=lerf_weights.detach()
                         )
+                    if self.config.feature_type == 'hqsam':
+                        outputs['hqsam_feature'] = []
+                        for f in lerf_field_outputs[LERFFieldHeadNames.ADVANCED_FEATURE]:
+                            outputs['hqsam_feature'].append(self.renderer_feature(
+                                embeds=f, weights=lerf_weights.detach()
+                            ))
+                
         return outputs
 
     @torch.no_grad()
@@ -249,11 +269,13 @@ class LERFModel(NerfactoModel):
         image_height, image_width = camera_ray_bundle.origins.shape[:2]
         num_rays = len(camera_ray_bundle)
         outputs_lists = defaultdict(list)  # dict from name:list of outputs (1 per bundle)
+
         for i in range(0, num_rays, num_rays_per_chunk):
             start_idx = i
             end_idx = i + num_rays_per_chunk
             ray_bundle = camera_ray_bundle.get_row_major_sliced_ray_bundle(start_idx, end_idx)
             outputs = self.forward(ray_bundle=ray_bundle)
+            
             # take the best scale for each query across each ray bundle
             
             if self.config.feature_type == 'clip':
@@ -274,23 +296,33 @@ class LERFModel(NerfactoModel):
             if self.config.feature_type == 'clip':
                 ray_bundle.metadata["override_scales"] = best_scales
             outputs = self.forward(ray_bundle=ray_bundle)
+
             # standard nerfstudio concatting
             for output_name, output in outputs.items():  # type: ignore
-
                 if output_name == "best_scales":
                     continue
-                if output_name == "raw_relevancy":
+                elif output_name == "raw_relevancy":
                     for r_id in range(output.shape[0]):
                         outputs_lists[f"relevancy_{r_id}"].append(output[r_id, ...])
                 else:
                     outputs_lists[output_name].append(output)
         outputs = {}
+        outputs['hqsam_feature'] = [[] for _ in range(4)]
         for output_name, outputs_list in outputs_lists.items():
+            if output_name == 'hqsam_feature':
+
+                for l in outputs_list:
+                    for i in range(len(l)):
+                        outputs[output_name][i].append(l[i])  # type: ignore
+                for i in range(len(outputs['hqsam_feature'])):    
+                    outputs['hqsam_feature'][i] = torch.cat(outputs['hqsam_feature'][i]).view(image_height, image_width, -1)
+            
             if not torch.is_tensor(outputs_list[0]):
                 # TODO: handle lists of tensors as well
                 continue
-            outputs[output_name] = torch.cat(outputs_list).view(image_height, image_width, -1)  # type: ignore
-            
+            else:
+                outputs[output_name] = torch.cat(outputs_list).view(image_height, image_width, -1)  # type: ignore
+
         for i in range(len(self.image_encoder.positives)):
             if self.config.feature_type == 'clip':
                 p_i = torch.clip(outputs[f"relevancy_{i}"] - 0.5, 0, 1)
@@ -309,8 +341,16 @@ class LERFModel(NerfactoModel):
             self.latest_featuremap = outputs['feature'].detach().cpu().numpy()
             if 'contrastive' in outputs:
                 self.latest_constrastive_featuremap = outputs['contrastive'].detach().cpu().numpy()
+            if "hqsam_feature" in outputs and self.config.feature_type == 'hqsam':
+                self.latest_hq_featuremap = []
+                for i in range(len(outputs['hqsam_feature'])):
+                    self.latest_hq_featuremap.append(outputs['hqsam_feature'][i].detach().cpu().numpy())
+                    outputs[f'hqsam_feature_{i}'] = outputs['hqsam_feature'][i]
+            
+                    
+                
             self.latest_rgb = outputs['rgb'].detach().cpu().numpy()
-        
+        outputs.pop('hqsam_feature')
         return outputs
 
     def _get_outputs_nerfacto(self, ray_samples: RaySamples):
@@ -333,7 +373,6 @@ class LERFModel(NerfactoModel):
     def get_loss_dict(self, outputs, batch, metrics_dict=None):
         loss_dict = super().get_loss_dict(outputs, batch, metrics_dict)
         if self.training:
-
             if batch['use_contrastive_loss']:
                 loss_dict = {}
                 # img_ray_0 = torch.where(batch['indices'][:, 0] == batch['image_idx'][0].to(batch['indices'].device))
@@ -357,13 +396,27 @@ class LERFModel(NerfactoModel):
                 # support_ray_index = torch.randint(0,  outputs["feature"].size(0), (self.config.contrastive_sample_n,))
                 support_ray = outputs["contrastive"][batch['sample_idx']]
                 loss_dict['contrastive_loss'] =  self.config.contrastive_loss_weight * self.contrastive_loss(batch['mask'], outputs['contrastive'], support_ray) 
+            if batch["feature"] is not None:
+                loss_dict["feature_loss"] = 0
+                if self.config.feature_type == 'hqsam':
+                    feature, hq_feature = batch["feature"]
+                    for i in range(len(hq_feature)):
+                        unreduced_feature= self.config.feature_loss_weight * torch.nn.functional.huber_loss(
+                            outputs["hqsam_feature"][i], hq_feature[i], delta=1.25, reduction="none"
+                        ) 
+                        loss_dict["feature_loss"] += unreduced_feature.sum(dim=-1).nanmean()
+                else:
+                    feature = batch["feature"]
+                unreduced_clip = self.config.feature_loss_weight * torch.nn.functional.huber_loss(
+                    outputs["feature"], feature, delta=1.25, reduction="none"
+                )
+                loss_dict["feature_loss"] += unreduced_clip.sum(dim=-1).nanmean()
 
-            unreduced_clip = self.config.feature_loss_weight * torch.nn.functional.huber_loss(
-                outputs["feature"], batch["feature"], delta=1.25, reduction="none"
-            )
-            loss_dict["feature_loss"] = unreduced_clip.sum(dim=-1).nanmean()
-            unreduced_dino = torch.nn.functional.mse_loss(outputs["dino"], batch["dino"], reduction="none")
-            loss_dict["dino_loss"] = unreduced_dino.sum(dim=-1).nanmean()
+            if batch['dino'] is not None:
+                unreduced_dino = torch.nn.functional.mse_loss(outputs["dino"], batch["dino"], reduction="none")
+                loss_dict["dino_loss"] = unreduced_dino.sum(dim=-1).nanmean()
+                
+
             
         return loss_dict
 

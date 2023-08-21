@@ -11,6 +11,6 @@ ns-train samnerf-v2 \
 --pipeline.datamanager.contrastive_starting_epoch 10000 \
 --pipeline.datamanager.feature_starting_epoch 1000000 \
 --pipeline.datamanager.supersampling False \
---base-dir hqsam_1 \
+--base-dir hqsam \
 --pipeline.feature-type hqsam \
 --use-wandb False

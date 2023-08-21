@@ -1,7 +1,11 @@
 import typing
 from dataclasses import dataclass, field
 from typing import Literal, Type, Optional
-
+import cv2
+from tqdm import tqdm
+import torch
+import numpy as np
+import os
 import torch.distributed as dist
 from torch.cuda.amp.grad_scaler import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -12,10 +16,11 @@ from nerfstudio.pipelines.base_pipeline import (
     VanillaPipeline,
     VanillaPipelineConfig,
 )
+from pathlib import Path
 
-from samnerf_v2.data.lerf_datamanager import (
-    LERFDataManager,
-    LERFDataManagerConfig,
+from samnerf_v2.data.sam_datamanager import (
+    SAMDataManager,
+    SAMDataManagerConfig,
 )
 from samnerf_v2.samnerf import LERFModel, LERFModelConfig
 
@@ -27,6 +32,7 @@ from samnerf_v2.encoders.image_encoder import BaseImageEncoderConfig, BaseImageE
 from samnerf_v2.encoders.clip_encoder import CLIPNetworkConfig
 from samnerf_v2.encoders.openclip_encoder import OpenCLIPNetworkConfig
 from samnerf_v2.encoders.sam_encoder import SAMNetworkConfig
+from samnerf_v2.encoders.hqsam_encoder import HQSAMNetworkConfig
 
 
 @dataclass
@@ -35,16 +41,17 @@ class LERFPipelineConfig(VanillaPipelineConfig):
 
     _target: Type = field(default_factory=lambda: LERFPipeline)
     """target class to instantiate"""
-    datamanager: LERFDataManagerConfig = LERFDataManagerConfig()
+    datamanager: SAMDataManagerConfig = SAMDataManagerConfig()
     """specifies the datamanager config"""
     model: LERFModelConfig = LERFModelConfig()
     """specifies the model config"""
-    feature_type: Literal['clip', 'xdecoder', 'sam'] = 'sam'
+    feature_type: Literal['clip', 'xdecoder', 'sam', 'hqsam'] = 'sam'
     """specifies the vision-language network config""" 
     use_contrastive: bool = False
     
     # sam_checkpoint: str = './sam_checkpoint.pth'
-    sam_checkpoint: str = '/ssddata/yliugu/lerf/dependencies/Grounded-Segment-Anything/checkpoint/sam_vit_h_4b8939.pth'
+    # sam_checkpoint: str = '/ssddata/yliugu/lerf/dependencies/Grounded-Segment-Anything/checkpoint/sam_vit_h_4b8939.pth'/
+    sam_checkpoint: str = '/ssddata/yliugu/lerf/dependencies/sam-hq/pretrained_checkpoint/sam_hq_vit_l.pth'
 
 
 class LERFPipeline(VanillaPipeline):
@@ -79,6 +86,10 @@ class LERFPipeline(VanillaPipeline):
             network_config=SAMNetworkConfig(
                 sam_checkpoint=self.config.sam_checkpoint
             )
+        elif self.config.feature_type == 'hqsam':
+            network_config=HQSAMNetworkConfig(
+                sam_checkpoint=self.config.sam_checkpoint
+            )
         else:
             raise ValueError("Invalid Feature Type.")
 
@@ -105,7 +116,7 @@ class LERFPipeline(VanillaPipeline):
         self.image_encoder: BaseImageEncoder = network_config.setup()
         
 
-        self.datamanager: LERFDataManager = self.config.datamanager.setup(
+        self.datamanager: SAMDataManager = self.config.datamanager.setup(
             device=device,
             test_mode=test_mode,
             world_size=world_size,
@@ -130,3 +141,33 @@ class LERFPipeline(VanillaPipeline):
         if world_size > 1:
             self._model = typing.cast(LERFModel, DDP(self._model, device_ids=[local_rank], find_unused_parameters=True))
             dist.barrier(device_ids=[local_rank])
+    
+    def load_feature(self, save_root):
+        os.makedirs(save_root, exist_ok=True)
+        self.model.eval()
+        
+        
+        with torch.no_grad():
+            image_list = []
+            print('Rendering images...')
+            for i in tqdm(range(self.datamanager.feature_cameras.shape[0])):
+            # for i in range(2):
+                image_path = os.path.join(save_root, '{:04d}.png'.format(i))
+                if os.path.exists(image_path):
+                    img = cv2.imread(image_path)
+                    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                    image_list.append(torch.from_numpy(img) / 255)      
+                                  
+                    continue
+                ray_bundle = self.datamanager.get_ray_sample(i)
+                output = self.model.get_outputs_for_camera_ray_bundle(ray_bundle.to(self.model.device))
+                rgb = cv2.cvtColor((output['rgb'].cpu().numpy() * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
+                cv2.imwrite(image_path, rgb)
+                image_list.append(output['rgb'].cpu())
+            image_list = torch.stack(image_list, 0)
+            image_list = image_list.permute(0,3,1,2)
+            feature_path = Path(os.path.join(save_root, 'sam_default'))
+            self.datamanager.encoder_image(image_list, feature_path)
+        self.model.train()
+        return
+        

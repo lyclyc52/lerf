@@ -33,8 +33,9 @@ class LERFField(Field):
         grid_resolutions,
         clip_n_dims: int,
         spatial_distortion: SpatialDistortion = SceneContraction(),
-        feature_type: Literal['clip', 'xdecoder', 'sam'] = 'clip',
-        use_contrastive: bool = False
+        feature_type: Literal['clip', 'xdecoder', 'sam', 'hqsam'] = 'clip',
+        use_contrastive: bool = False,
+        hq_sam_n_dims: int = 1024
     ):
         super().__init__()
         assert len(grid_layers) == len(grid_sizes) and len(grid_resolutions) == len(grid_layers)
@@ -50,7 +51,7 @@ class LERFField(Field):
         self.feature_type = feature_type
         tot_out_dims = sum([e.n_output_dims for e in self.clip_encs])
         self.feature_net = tcnn.Network(
-            n_input_dims=tot_out_dims if self.feature_type == 'sam' else tot_out_dims + 1,
+            n_input_dims=tot_out_dims if self.feature_type == 'sam' or self.feature_type == 'hqsam' else tot_out_dims + 1,
             n_output_dims=clip_n_dims,
             network_config={
                 "otype": "CutlassMLP",
@@ -63,7 +64,7 @@ class LERFField(Field):
         self.use_contrastive = use_contrastive
         if self.use_contrastive:
             self.contrastive_net = tcnn.Network(
-                n_input_dims=tot_out_dims if self.feature_type == 'sam' else tot_out_dims + 1,
+                n_input_dims=tot_out_dims if self.feature_type == 'sam' or self.feature_type == 'hqsam' else tot_out_dims + 1,
                 n_output_dims=clip_n_dims,
                 network_config={
                     "otype": "CutlassMLP",
@@ -73,6 +74,24 @@ class LERFField(Field):
                     "n_hidden_layers": 4,
                 },
             )
+        
+        if self.feature_type == 'hqsam':
+            self.hq_feature_net = []
+            for i in range(4):
+                self.hq_feature_net.append(
+                    tcnn.Network(
+                        n_input_dims=tot_out_dims if self.feature_type == 'sam' or self.feature_type == 'hqsam' else tot_out_dims + 1,
+                        n_output_dims=hq_sam_n_dims,
+                        network_config={
+                        "otype": "CutlassMLP",
+                        "activation": "ReLU",
+                        "output_activation": "None",
+                        "n_neurons": 1024,
+                        "n_hidden_layers": 4,
+                    },
+            )
+        
+                )
         
         self.dino_net = tcnn.Network(
             n_input_dims=tot_out_dims,
@@ -120,6 +139,14 @@ class LERFField(Field):
         elif self.feature_type == 'sam':
             sam_pass = self.feature_net(x).view(*ray_samples.frustums.shape, -1)
             outputs[LERFFieldHeadNames.FEATURE] = sam_pass
+        elif self.feature_type == 'hqsam':
+            sam_pass = self.feature_net(x).view(*ray_samples.frustums.shape, -1)
+            outputs[LERFFieldHeadNames.FEATURE] = sam_pass
+            
+            hqsam_pass = []
+            for net in self.hq_feature_net:
+                hqsam_pass.append(net(x).view(*ray_samples.frustums.shape, -1))
+            outputs[LERFFieldHeadNames.ADVANCED_FEATURE] = hqsam_pass
         dino_pass = self.dino_net(x).view(*ray_samples.frustums.shape, -1)
         outputs[LERFFieldHeadNames.DINO] = dino_pass
         if self.use_contrastive:
@@ -143,5 +170,6 @@ class LERFField(Field):
             clip_pass = self.feature_net(hashgrid_field).view(
                 *ray_samples.frustums.shape, -1
             )
+            output
 
         return output
