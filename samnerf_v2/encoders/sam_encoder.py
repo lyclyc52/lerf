@@ -4,6 +4,8 @@ from typing import Tuple, Type
 import torch
 import torchvision
 import numpy as np
+import cv2
+import torch.nn.functional as F
 
 
 try:
@@ -78,12 +80,49 @@ class SAMNetwork(BaseImageEncoder):
         self.model.set_image(input)
         return self.model.features
     
+    def set_model_image_info(self, image):
+        input_image = self.model.transform.apply_image(image)
+        input_image_torch = torch.as_tensor(input_image, device=self.device)
+        transformed_image = input_image_torch.permute(2, 0, 1).contiguous()[None, :, :, :]
+        
+        assert (
+            len(transformed_image.shape) == 4
+            and transformed_image.shape[1] == 3
+            and max(*transformed_image.shape[2:]) == self.model.image_encoder.img_size
+        ), f"set_torch_image input must be BCHW with long side {self.model.image_encoder.img_size}."
+        self.model.reset_image()
+
+        self.model.original_size = image.shape[:2]
+        self.model.input_size = tuple(transformed_image.shape[-2:])
+        self.model.is_image_set = True
+        
+    def set_torch_feature(
+        self,
+        features: np.ndarray,
+    ) -> None:
+      target_feature_size = self.model.model.image_encoder.img_size // self.model.model.image_encoder.patch_size
+      if features.shape[1] != target_feature_size or features.shape[2] != target_feature_size:
+        f_h, f_w = features.shape[1:]
+        max_length = max(f_h, f_w)
+        h,w = int(np.floor(target_feature_size * f_h / max_length)), int(np.floor(target_feature_size * f_w / max_length))
+        features = cv2.resize(features.transpose(1,2,0), (w,h), interpolation = cv2.INTER_NEAREST )
+        features = features.transpose(2,0,1)
+        features = torch.from_numpy(features[None,...]).to(self.model.device)
+        
+        padh = target_feature_size - h
+        padw = target_feature_size - w
+        self.features = F.pad(features, (0, padw, 0, padh))
+      else:
+        self.features = torch.from_numpy(features[None,...]).to(self.model.device)
+
+    
     def decode_feature(self, feature, image, position):
         image = (image.cpu().numpy() * 255).astype(np.uint8)
-        self.model.set_image_info(image)
         
+
+        self.set_model_image_info(image)
         feature = feature.permute(2,0,1).cpu().numpy()
-        self.model.set_torch_feature(feature)
+        self.set_torch_feature(feature)
         masks, scores, logits = self.model.predict(
             point_coords=position,
             point_labels=np.array([1]),

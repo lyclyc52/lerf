@@ -19,7 +19,7 @@ from nerfstudio.viewer.server.viewer_elements import *
 from torch.nn import Parameter
 
 from samnerf_v2.encoders.image_encoder import BaseImageEncoder
-from samnerf_v2.lerf_field import LERFField
+from samnerf_v2.samnerf_field import LERFField
 from samnerf_v2.lerf_fieldheadnames import LERFFieldHeadNames
 from samnerf_v2.lerf_renderers import CLIPRenderer, MeanRenderer
 from samnerf_v2.helper import print_shape
@@ -81,6 +81,7 @@ class LERFModel(NerfactoModel):
 
         # populate some viewer logic
         # TODO use the values from this code to select the scale
+        
         # def scale_cb(element):
         #     self.config.n_scales = element.value
 
@@ -186,10 +187,12 @@ class LERFModel(NerfactoModel):
             if self.config.feature_type == 'clip':
                 clip_scales = torch.ones_like(lerf_samples.spacing_starts, device=self.device)
 
+
         override_scales = (
             None if "override_scales" not in ray_bundle.metadata else ray_bundle.metadata["override_scales"]
         )
         weights_list.append(weights)
+        
         if self.training:
             outputs["weights_list"] = weights_list
             outputs["ray_samples_list"] = ray_samples_list
@@ -200,7 +203,6 @@ class LERFModel(NerfactoModel):
             lerf_field_outputs = self.lerf_field.get_outputs(lerf_samples, clip_scales)
         elif self.config.feature_type == 'sam' or self.config.feature_type == 'hqsam':
             lerf_field_outputs = self.lerf_field.get_outputs(lerf_samples)
-    
 
         if self.training:
             outputs["feature"] = self.renderer_feature(
@@ -209,6 +211,7 @@ class LERFModel(NerfactoModel):
             outputs["dino"] = self.renderer_mean(
                 embeds=lerf_field_outputs[LERFFieldHeadNames.DINO], weights=lerf_weights.detach()
             )
+            
             if self.config.use_contrastive:
                 outputs["contrastive"] = self.renderer_contrastive(
                     embeds=lerf_field_outputs[LERFFieldHeadNames.CONTRASTIVE], weights=lerf_weights.detach()
@@ -220,7 +223,6 @@ class LERFModel(NerfactoModel):
                         embeds=f, weights=lerf_weights.detach()
                     ))
                 
-
         if not self.training:
             with torch.no_grad():
                 if self.config.feature_type == 'clip':
@@ -233,7 +235,6 @@ class LERFModel(NerfactoModel):
                     )
                     outputs["raw_relevancy"] = max_across  # N x B x 1
                     outputs["best_scales"] = best_scales.to(self.device)  # N
-                    
                     outputs["feature"] = self.renderer_feature(
                         embeds=lerf_field_outputs[LERFFieldHeadNames.FEATURE], weights=lerf_weights.detach()
                     )
@@ -310,7 +311,6 @@ class LERFModel(NerfactoModel):
         outputs['hqsam_feature'] = [[] for _ in range(4)]
         for output_name, outputs_list in outputs_lists.items():
             if output_name == 'hqsam_feature':
-
                 for l in outputs_list:
                     for i in range(len(l)):
                         outputs[output_name][i].append(l[i])  # type: ignore
@@ -335,7 +335,8 @@ class LERFModel(NerfactoModel):
                 masks, scores, logits = self.image_encoder.decode_feature(outputs['feature'], outputs['rgb'], position)
                 mask = outputs["rgb"]
                 mask[masks[0], :] = mask[masks[0], :] * 0.5 + torch.tensor([0.6,0.1,0.1])[None, None, ...].to(mask.device)
-                outputs[f"composited_{i}"] = torch.clip(mask, 0, 1)
+                outputs[f"composited_0"] = torch.clip(mask, 0, 1)
+
                 
         if image_width >= 512:
             self.latest_featuremap = outputs['feature'].detach().cpu().numpy()
@@ -371,32 +372,19 @@ class LERFModel(NerfactoModel):
         return field_outputs, outputs, weights
 
     def get_loss_dict(self, outputs, batch, metrics_dict=None):
-        loss_dict = super().get_loss_dict(outputs, batch, metrics_dict)
+        
         if self.training:
+            if batch['train_feature']:
+                loss_dict = {}
+            else:
+                loss_dict = super().get_loss_dict(outputs, batch, metrics_dict)
+                
+            
             if batch['use_contrastive_loss']:
                 loss_dict = {}
-                # img_ray_0 = torch.where(batch['indices'][:, 0] == batch['image_idx'][0].to(batch['indices'].device))
-                # img_ray_1 = torch.where(batch['indices'][:, 0] == batch['image_idx'][1].to(batch['indices'].device))
-                # img_ray_0 = outputs["clip"][img_ray_0]
-                # img_ray_1 = outputs["clip"][img_ray_1]
-                
-                # support_ray = torch.randint(0, img_ray_0.size(0), (self.config.contrastive_sample_n,))
-                # support_ray = img_ray_0[support_ray].detach()
-                
-                # self_support_mask = self.self_support(img_ray_1, support_ray)
-                # loss_dict['contrastive_loss'] =  self.config.contrastive_loss_weight * self.contrastive_loss(self_support_mask, img_ray_1, support_ray) 
-                
-                
-                # support_ray_index = torch.randint(0,  outputs["feature"].size(0), (self.config.contrastive_sample_n,))
-                # support_ray = outputs["feature"][support_ray_index].detach()
-                # img_ray_1 = torch.cat([outputs["feature"][0:support_ray_index], outputs["feature"][support_ray_index+1:]])
-                # self_support_mask = self.self_support(img_ray_1, support_ray)
-                # loss_dict['contrastive_loss'] =  self.config.contrastive_loss_weight * self.contrastive_loss(self_support_mask, img_ray_1, support_ray.detach()) 
-    
-                # support_ray_index = torch.randint(0,  outputs["feature"].size(0), (self.config.contrastive_sample_n,))
                 support_ray = outputs["contrastive"][batch['sample_idx']]
                 loss_dict['contrastive_loss'] =  self.config.contrastive_loss_weight * self.contrastive_loss(batch['mask'], outputs['contrastive'], support_ray) 
-            if batch["feature"] is not None:
+            if "feature" in batch:
                 loss_dict["feature_loss"] = 0
                 if self.config.feature_type == 'hqsam':
                     feature, hq_feature = batch["feature"]
@@ -412,11 +400,11 @@ class LERFModel(NerfactoModel):
                 )
                 loss_dict["feature_loss"] += unreduced_clip.sum(dim=-1).nanmean()
 
-            if batch['dino'] is not None:
+            if "dino" in batch:
                 unreduced_dino = torch.nn.functional.mse_loss(outputs["dino"], batch["dino"], reduction="none")
                 loss_dict["dino_loss"] = unreduced_dino.sum(dim=-1).nanmean()
-                
-
+        else:
+            loss_dict = super().get_loss_dict(outputs, batch, metrics_dict)
             
         return loss_dict
 

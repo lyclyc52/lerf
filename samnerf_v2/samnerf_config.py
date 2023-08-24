@@ -13,8 +13,9 @@ from nerfstudio.plugins.types import MethodSpecification
 
 from samnerf_v2.data.sam_datamanager import SAMDataManagerConfig
 from samnerf_v2.samnerf import LERFModelConfig
-from samnerf_v2.sam_pipeline import LERFPipelineConfig
+from samnerf_v2.samnerf_pipeline import LERFPipelineConfig
 from samnerf_v2.samnerf_trainer import SAMNERFTrainerConfig, SAMNERFTrainer
+# from samnerf_v2.samnerf_viewer import SAMNERFViewerConfig
 """
 Swap out the network config to use OpenCLIP or CLIP here.
 """
@@ -60,6 +61,7 @@ samnerf_method = MethodSpecification(
             },
         },
         viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
+        # viewer=SAMNERFViewerConfig(num_rays_per_chunk=1 << 15),
         vis="viewer",
     ),
     description="Base config for LERF",

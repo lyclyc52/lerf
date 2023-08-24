@@ -7,6 +7,7 @@ from torch import nn
 from torch.nn.parameter import Parameter
 from torchtyping import TensorType
 
+from nerfstudio.fields.base_field import shift_directions_for_tcnn
 from nerfstudio.cameras.rays import RaySamples
 from nerfstudio.data.scene_box import SceneBox
 from nerfstudio.field_components.activations import trunc_exp
@@ -50,6 +51,8 @@ class LERFField(Field):
         
         self.feature_type = feature_type
         tot_out_dims = sum([e.n_output_dims for e in self.clip_encs])
+        
+        
         self.feature_net = tcnn.Network(
             n_input_dims=tot_out_dims if self.feature_type == 'sam' or self.feature_type == 'hqsam' else tot_out_dims + 1,
             n_output_dims=clip_n_dims,
@@ -128,6 +131,14 @@ class LERFField(Field):
         positions = ray_samples.frustums.get_positions().detach()
         positions = self.spatial_distortion(positions)
         positions = (positions + 2.0) / 4.0
+        
+        
+
+        # camera_indices = ray_samples.camera_indices.squeeze()
+        # directions = shift_directions_for_tcnn(ray_samples.frustums.directions)
+        # directions_flat = directions.view(-1, 3)
+        # d = self.direction_encoding(directions_flat)
+
 
         xs = [e(positions.view(-1, 3)) for e in self.clip_encs]
         x = torch.concat(xs, dim=-1)
@@ -149,6 +160,7 @@ class LERFField(Field):
             outputs[LERFFieldHeadNames.ADVANCED_FEATURE] = hqsam_pass
         dino_pass = self.dino_net(x).view(*ray_samples.frustums.shape, -1)
         outputs[LERFFieldHeadNames.DINO] = dino_pass
+        
         if self.use_contrastive:
             if self.feature_type == 'clip':
                 contrastive_pass = self.contrastive_net(torch.cat([x, clip_scales.view(-1, 1)], dim=-1)).view(*ray_samples.frustums.shape, -1)

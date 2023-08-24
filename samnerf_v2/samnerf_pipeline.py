@@ -9,6 +9,9 @@ import os
 import torch.distributed as dist
 from torch.cuda.amp.grad_scaler import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
+from pathlib import PosixPath
+
+from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Type, Union, cast
 
 from nerfstudio.configs import base_config as cfg
 from nerfstudio.models.base_model import ModelConfig
@@ -146,28 +149,50 @@ class LERFPipeline(VanillaPipeline):
         os.makedirs(save_root, exist_ok=True)
         self.model.eval()
         
+        image_list_root = os.path.join(save_root, 'origin')
+        origin_image_list_root = os.path.join(save_root, 'downsample')
+        
+        os.makedirs(image_list_root, exist_ok=True)
+        os.makedirs(origin_image_list_root, exist_ok=True)
         
         with torch.no_grad():
             image_list = []
-            print('Rendering images...')
+            image_path_list = []
+            
             for i in tqdm(range(self.datamanager.feature_cameras.shape[0])):
             # for i in range(2):
-                image_path = os.path.join(save_root, '{:04d}.png'.format(i))
+                image_path = os.path.join(image_list_root, '{:04d}.png'.format(i))
+                downsample_image_path = os.path.join(origin_image_list_root, '{:04d}.png'.format(i))
+                # image_path_list.append(PosixPath(downsample_image_path))
+                image_path_list.append(PosixPath(image_path))
                 if os.path.exists(image_path):
                     img = cv2.imread(image_path)
                     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                     image_list.append(torch.from_numpy(img) / 255)      
-                                  
                     continue
+                
                 ray_bundle = self.datamanager.get_ray_sample(i)
                 output = self.model.get_outputs_for_camera_ray_bundle(ray_bundle.to(self.model.device))
                 rgb = cv2.cvtColor((output['rgb'].cpu().numpy() * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
                 cv2.imwrite(image_path, rgb)
+                cv2.imwrite(downsample_image_path, cv2.resize(rgb, [64, 64]))
                 image_list.append(output['rgb'].cpu())
             image_list = torch.stack(image_list, 0)
             image_list = image_list.permute(0,3,1,2)
             feature_path = Path(os.path.join(save_root, 'sam_default'))
-            self.datamanager.encoder_image(image_list, feature_path)
+            self.datamanager.encoder_image(image_list, image_path_list, feature_path)
         self.model.train()
         return
         
+        
+    def load_origin_nerf_pipeline(self, loaded_state: Dict[str, Any]) -> None:
+        """Load the checkpoint from the given path
+
+        Args:
+            loaded_state: pre-trained model state dict
+            step: training step of the loaded checkpoint
+        """
+        state = {
+            (key[len("module.") :] if key.startswith("module.") else key): value for key, value in loaded_state.items()
+        }
+        self.load_state_dict(state, strict=True)

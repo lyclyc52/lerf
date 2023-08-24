@@ -8,8 +8,9 @@ ns-train samnerf-v2 \
 --pipeline.use-contrastive False \
 --project-name contrastive \
 --pipeline.feature-type sam \
---pipeline.datamanager.feature_starting_epoch 1000000 \
+--pipeline.datamanager.feature_starting_epoch 10000 \
 --pipeline.datamanager.supersampling False \
---base-dir sam \
+--base-dir sam_0 \
 --pipeline.feature-type sam \
---use-wandb False
+--use-wandb True 
+# --load_origin_nerf_checkpoint /ssddata/yliugu/lerf/outputs/teatime/samnerf-v2/origin_nerf/nerfstudio_models/step-000029999.ckpt
